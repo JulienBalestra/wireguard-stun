@@ -20,6 +20,7 @@ type Config struct {
 	Route53Config   *r53Client.Config
 
 	ReconcileInterval time.Duration
+	HandshakeAge      time.Duration
 }
 
 type Registry struct {
@@ -138,7 +139,7 @@ func (r *Registry) processRecordChange(upserts, deletes []*route53.Change, recor
 }
 
 func (r *Registry) newPeerRecords(peer *wireguard.Peer) *peerRecords {
-	toDelete := time.Since(peer.LastHandshakeTime) > time.Minute*3+time.Second*30
+	toDelete := time.Since(peer.LastHandshakeTime) > r.conf.HandshakeAge
 	prs := &peerRecords{
 		srv: &peerRecord{
 			name:       peer.PublicKeyHash + r.conf.Route53Config.SRVRecordSuffix,
@@ -157,6 +158,7 @@ func (r *Registry) newPeerRecords(peer *wireguard.Peer) *peerRecords {
 		zap.Duration("sinceLastHandshake", time.Since(peer.LastHandshakeTime)),
 		zap.String("publicKey", peer.PublicKey.String()),
 		zap.String("publicKeyHash", peer.PublicKeyHash),
+		zap.Bool("toDelete", toDelete),
 	)
 	if toDelete {
 		return prs

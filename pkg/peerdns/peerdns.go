@@ -20,6 +20,7 @@ type Config struct {
 
 	WireguardConfig *wireguard.Config
 	StaticPeers     []string
+	HandshakeAge    time.Duration
 }
 
 type PeerDNS struct {
@@ -67,12 +68,12 @@ func (p *PeerDNS) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			_ = p.RenconcilePeerEndpoints(ctx)
+			_ = p.ReconcilePeerEndpoints(ctx)
 		}
 	}
 }
 
-func (p *PeerDNS) RenconcilePeerEndpoints(ctx context.Context) error {
+func (p *PeerDNS) ReconcilePeerEndpoints(ctx context.Context) error {
 	peers, err := p.wg.GetPeers()
 	if err != nil {
 		return err
@@ -93,7 +94,7 @@ func (p *PeerDNS) RenconcilePeerEndpoints(ctx context.Context) error {
 			zap.String("resolverEndpoint", p.conf.ResolverEndpoint),
 			zap.Duration("handshakeAge", handshakeAge),
 		)
-		if handshakeAge < time.Minute*3+time.Second+30 {
+		if handshakeAge < p.conf.HandshakeAge {
 			zctx.Info("skipping peer with recent handshake")
 			continue
 		}

@@ -33,6 +33,7 @@ func NewRegistryCommand(ctx context.Context) *cobra.Command {
 	fs.StringVar(&reconcileConfig.Route53Config.ZoneID, "zone-id", "", "route53 hosted zone id")
 	fs.Int64Var(&reconcileConfig.Route53Config.TTL, "ttl", 60, "route53 record TTL")
 	fs.DurationVar(&reconcileConfig.ReconcileInterval, "reconcile-interval", time.Second*30, "reconciliation interval")
+	fs.DurationVar(&reconcileConfig.HandshakeAge, "handshake-age", time.Minute*3, "skip recent handshake peers")
 
 	registryCmd.Flags().AddFlagSet(fs)
 	registryCmd.RunE = func(cmd *cobra.Command, args []string) error {

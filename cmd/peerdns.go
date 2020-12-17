@@ -29,8 +29,9 @@ func NewPeerDNSCommand(ctx context.Context) *cobra.Command {
 	fs.StringVar(&peerDNSConfig.SRVRecordSuffix, "srv-record-suffix", "._wg._udp.julienbalestra.com.", "SRV route53 record suffix")
 	fs.StringVar(&peerDNSConfig.ResolverEndpoint, "resolver-endpoint", "ns-174.awsdns-21.com:53", "dns resolver endpoint ip:port")
 	fs.DurationVar(&peerDNSConfig.DNSTimeout, "dns-timeout", time.Second*60, "per dns query timeout")
-	fs.StringArrayVar(&peerDNSConfig.StaticPeers, "static-peers", nil, "static peers to ignore")
+	fs.StringArrayVar(&peerDNSConfig.StaticPeers, "static-peers", nil, "skip static peers by public key")
 	fs.DurationVar(&peerDNSConfig.ReconcileInterval, "reconcile-interval", time.Second*30, "reconciliation interval")
+	fs.DurationVar(&peerDNSConfig.HandshakeAge, "handshake-age", time.Minute*3, "skip recent handshake peers")
 
 	registry.Flags().AddFlagSet(fs)
 	registry.RunE = func(cmd *cobra.Command, args []string) error {
