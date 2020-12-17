@@ -1,0 +1,15 @@
+[Unit]
+After=network-online.target
+Description=wireguard-stun
+Documentation=https://github.com/JulienBalestra/wireguard-stun
+
+[Service]
+Environment=$STATIC_PEERS=
+EnvironmentFile=/etc/wireguard-stun/environment
+
+ExecStart=/usr/local/bin/wireguard-stun peer-dns --static-peers $STATIC_PEERS
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
