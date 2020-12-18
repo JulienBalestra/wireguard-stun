@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/JulienBalestra/dry/pkg/signals"
-	"github.com/JulienBalestra/wireguard-stun/pkg/registry"
 	"github.com/JulienBalestra/wireguard-stun/pkg/registry/route53"
 	"github.com/JulienBalestra/wireguard-stun/pkg/wireguard"
 	"github.com/spf13/cobra"
@@ -22,9 +21,9 @@ func NewRegistryCommand(ctx context.Context) *cobra.Command {
 	}
 	fs := &pflag.FlagSet{}
 
-	reconcileConfig := &registry.Config{
+	reconcileConfig := &route53.Config{
 		WireguardConfig: &wireguard.Config{},
-		Route53Config:   &route53.Config{},
+		Route53Config:   &route53.AWSClientConfig{},
 	}
 
 	fs.StringVar(&reconcileConfig.WireguardConfig.DeviceName, "device-name", "wg0", "wireguard device name")
@@ -37,7 +36,7 @@ func NewRegistryCommand(ctx context.Context) *cobra.Command {
 
 	registryCmd.Flags().AddFlagSet(fs)
 	registryCmd.RunE = func(cmd *cobra.Command, args []string) error {
-		rec, err := registry.NewRegistry(reconcileConfig)
+		rec, err := route53.NewRegistry(reconcileConfig)
 		if err != nil {
 			return err
 		}

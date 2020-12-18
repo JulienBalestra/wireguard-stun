@@ -1,4 +1,4 @@
-package registry
+package route53
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 
 	"github.com/JulienBalestra/dry/pkg/ticknow"
 
-	r53Client "github.com/JulienBalestra/wireguard-stun/pkg/registry/route53"
 	"github.com/JulienBalestra/wireguard-stun/pkg/wireguard"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/route53"
@@ -17,7 +16,7 @@ import (
 
 type Config struct {
 	WireguardConfig *wireguard.Config
-	Route53Config   *r53Client.Config
+	Route53Config   *AWSClientConfig
 
 	ReconcileInterval time.Duration
 	HandshakeAge      time.Duration
@@ -26,8 +25,8 @@ type Config struct {
 type Registry struct {
 	conf *Config
 
-	wg  *wireguard.Wireguard
-	r53 *r53Client.Route53
+	wg   *wireguard.Wireguard
+	r53c *Client
 
 	mu            sync.RWMutex
 	peers         []wireguard.Peer
@@ -40,7 +39,7 @@ func NewRegistry(conf *Config) (*Registry, error) {
 	if err != nil {
 		return nil, err
 	}
-	r53, err := r53Client.New(conf.Route53Config)
+	r53c, err := NewRoute53Client(conf.Route53Config)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +47,7 @@ func NewRegistry(conf *Config) (*Registry, error) {
 	return &Registry{
 		conf: conf,
 		wg:   wg,
-		r53:  r53,
+		r53c: r53c,
 	}, nil
 }
 
@@ -169,7 +168,7 @@ func (r *Registry) newPeerRecords(peer *wireguard.Peer) *peerRecords {
 }
 
 func (r *Registry) updateCachedRecords(ctx context.Context) error {
-	srvRecordSets, aRecordSets, err := r.r53.GetRecords(ctx)
+	srvRecordSets, aRecordSets, err := r.r53c.GetRecords(ctx)
 	if err != nil {
 		zap.L().Error("failed to get record sets", zap.Error(err))
 		return err
@@ -257,7 +256,7 @@ func (r *Registry) Reconcile(ctx context.Context) error {
 	if len(upserts) == 0 && len(deletes) == 0 {
 		return nil
 	}
-	err := r.r53.ExecuteChanges(ctx, append(upserts, deletes...))
+	err := r.r53c.ExecuteChanges(ctx, append(upserts, deletes...))
 	if err != nil {
 		return err
 	}

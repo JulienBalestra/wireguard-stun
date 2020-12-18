@@ -11,15 +11,15 @@ import (
 	"go.uber.org/zap"
 )
 
-type Config struct {
+type AWSClientConfig struct {
 	SRVRecordSuffix string
 	ARecordSuffix   string
 	ZoneID          string
 	TTL             int64
 }
 
-type Route53 struct {
-	conf *Config
+type Client struct {
+	conf *AWSClientConfig
 
 	awsConfig *aws.Config
 	zoneID    *string
@@ -27,7 +27,7 @@ type Route53 struct {
 	rc *route53.Route53
 }
 
-func New(conf *Config) (*Route53, error) {
+func NewRoute53Client(conf *AWSClientConfig) (*Client, error) {
 	if conf.SRVRecordSuffix == "" {
 		return nil, errors.New("must provide a SRVRecordSuffix")
 	}
@@ -45,7 +45,7 @@ func New(conf *Config) (*Route53, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Route53{
+	return &Client{
 		conf:      conf,
 		awsConfig: awsConfig,
 
@@ -54,7 +54,7 @@ func New(conf *Config) (*Route53, error) {
 	}, nil
 }
 
-func (r *Route53) GetRecords(ctx aws.Context) (map[string]*route53.ResourceRecordSet, map[string]*route53.ResourceRecordSet, error) {
+func (r *Client) GetRecords(ctx aws.Context) (map[string]*route53.ResourceRecordSet, map[string]*route53.ResourceRecordSet, error) {
 	zctx := zap.L().With(
 		zap.String("srvRecordSuffix", r.conf.SRVRecordSuffix),
 		zap.String("aRecordSuffix", r.conf.ARecordSuffix),
@@ -100,7 +100,7 @@ func (r *Route53) GetRecords(ctx aws.Context) (map[string]*route53.ResourceRecor
 	return peerSRVRecords, peerARecords, nil
 }
 
-func (r *Route53) ExecuteChanges(ctx context.Context, changes []*route53.Change) error {
+func (r *Client) ExecuteChanges(ctx context.Context, changes []*route53.Change) error {
 	zap.L().Info("changing resource record sets")
 	_, err := r.rc.ChangeResourceRecordSetsWithContext(
 		ctx,
