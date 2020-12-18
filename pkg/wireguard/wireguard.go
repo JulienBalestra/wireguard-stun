@@ -27,7 +27,7 @@ type Peer struct {
 
 func NewPeer(peer *wgtypes.Peer) *Peer {
 	h := sha1.New()
-	_, _ = h.Write([]byte(peer.PublicKey.String()))
+	_, _ = h.Write(peer.PublicKey[:])
 	hash := hex.EncodeToString(h.Sum(nil))[:7]
 	return &Peer{
 		Peer:          *peer,
