@@ -104,7 +104,10 @@ func (w *Wireguard) SetNewEndpoints(peerUpdates map[wgtypes.Key]net.UDPAddr) err
 		if !ok {
 			continue
 		}
-		zctx.Info("setting peer endpoint")
+		zctx.Info("setting peer endpoint",
+			zap.String("endpoint", newEndpoint.String()),
+			zap.String("publicKey", peer.PublicKey.String()),
+		)
 		cfg := wgtypes.PeerConfig{
 			PublicKey:                   peer.PublicKey,
 			UpdateOnly:                  false,

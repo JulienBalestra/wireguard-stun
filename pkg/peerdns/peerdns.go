@@ -147,6 +147,6 @@ func (p *PeerDNS) ReconcilePeerEndpoints(ctx context.Context) error {
 		zap.L().Debug("no update")
 		return nil
 	}
-	zap.L().Info("updating peer configuration")
+	zap.L().Debug("updating peer configuration")
 	return p.wg.SetNewEndpoints(peerUpdates)
 }
