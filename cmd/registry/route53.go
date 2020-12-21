@@ -1,4 +1,4 @@
-package cmd
+package registry
 
 import (
 	"context"
@@ -12,12 +12,12 @@ import (
 	"github.com/spf13/pflag"
 )
 
-func NewRegistryCommand(ctx context.Context) *cobra.Command {
-	registryCmd := &cobra.Command{
-		Short:   "registry",
-		Long:    "registry",
-		Use:     "registry",
-		Aliases: []string{"r"},
+func NewRoute53Command(ctx context.Context) *cobra.Command {
+	r53cmd := &cobra.Command{
+		Short:   "route53",
+		Long:    "route53",
+		Use:     "route53",
+		Aliases: []string{"r53"},
 	}
 	fs := &pflag.FlagSet{}
 
@@ -34,8 +34,8 @@ func NewRegistryCommand(ctx context.Context) *cobra.Command {
 	fs.DurationVar(&reconcileConfig.ReconcileInterval, "reconcile-interval", time.Second*30, "reconciliation interval")
 	fs.DurationVar(&reconcileConfig.HandshakeAge, "handshake-age", time.Minute*3, "skip recent handshake peers")
 
-	registryCmd.Flags().AddFlagSet(fs)
-	registryCmd.RunE = func(cmd *cobra.Command, args []string) error {
+	r53cmd.Flags().AddFlagSet(fs)
+	r53cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		rec, err := route53.NewRegistry(reconcileConfig)
 		if err != nil {
 			return err
@@ -55,5 +55,5 @@ func NewRegistryCommand(ctx context.Context) *cobra.Command {
 		waitGroup.Wait()
 		return nil
 	}
-	return registryCmd
+	return r53cmd
 }

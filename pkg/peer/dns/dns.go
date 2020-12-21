@@ -1,8 +1,9 @@
-package peerdns
+package dns
 
 import (
 	"context"
 	"errors"
+	"github.com/JulienBalestra/dry/pkg/ticknow"
 	"net"
 	"time"
 
@@ -61,8 +62,8 @@ func NewPeerDNS(conf *Config) (*PeerDNS, error) {
 }
 
 func (p *PeerDNS) Run(ctx context.Context) error {
-	ticker := time.NewTicker(p.conf.ReconcileInterval)
-	defer ticker.Stop()
+	zap.L().Info("starting dns reconciliation", zap.Duration("reconcileInterval", p.conf.ReconcileInterval))
+	ticker := ticknow.NewTickNow(ctx, p.conf.ReconcileInterval)
 	for {
 		select {
 		case <-ctx.Done():
@@ -74,7 +75,7 @@ func (p *PeerDNS) Run(ctx context.Context) error {
 }
 
 func (p *PeerDNS) ReconcilePeerEndpoints(ctx context.Context) error {
-	peers, err := p.wg.GetPeers()
+	peers, err := p.wg.GetHashedPeers()
 	if err != nil {
 		return err
 	}
@@ -116,6 +117,17 @@ func (p *PeerDNS) ReconcilePeerEndpoints(ctx context.Context) error {
 		if !ok {
 			zctx.Warn("skipping invalid SRV answer", zap.Error(err))
 			continue
+		}
+		if len(resp.Extra) == 1 {
+			aAnswer, ok := resp.Extra[0].(*dns.A)
+			if ok {
+				peerUpdates[peer.PublicKey] = net.UDPAddr{
+					IP:   aAnswer.A,
+					Port: int(srvAnswer.Port),
+				}
+				continue
+			}
+			zctx.Warn("skipping invalid SRV extra answer", zap.Error(err))
 		}
 		zctx = zctx.With(
 			zap.String("aQuery", srvAnswer.Target),

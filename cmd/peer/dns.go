@@ -1,4 +1,4 @@
-package cmd
+package peer
 
 import (
 	"context"
@@ -6,22 +6,22 @@ import (
 	"time"
 
 	"github.com/JulienBalestra/dry/pkg/signals"
-	"github.com/JulienBalestra/wireguard-stun/pkg/peerdns"
+	"github.com/JulienBalestra/wireguard-stun/pkg/peer/dns"
 	"github.com/JulienBalestra/wireguard-stun/pkg/wireguard"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
 
-func NewPeerDNSCommand(ctx context.Context) *cobra.Command {
-	registry := &cobra.Command{
-		Short:   "peer-dns",
-		Long:    "peer-dns",
-		Use:     "peer-dns",
-		Aliases: []string{"p"},
+func NewDNSCommand(ctx context.Context) *cobra.Command {
+	d := &cobra.Command{
+		Short:   "dns",
+		Long:    "dns",
+		Use:     "dns",
+		Aliases: []string{"d"},
 	}
 	fs := &pflag.FlagSet{}
 
-	peerDNSConfig := &peerdns.Config{
+	peerDNSConfig := &dns.Config{
 		WireguardConfig: &wireguard.Config{},
 	}
 
@@ -33,9 +33,9 @@ func NewPeerDNSCommand(ctx context.Context) *cobra.Command {
 	fs.DurationVar(&peerDNSConfig.ReconcileInterval, "reconcile-interval", time.Second*15, "reconciliation interval")
 	fs.DurationVar(&peerDNSConfig.HandshakeAge, "handshake-age", time.Minute*3, "skip recent handshake peers")
 
-	registry.Flags().AddFlagSet(fs)
-	registry.RunE = func(cmd *cobra.Command, args []string) error {
-		pd, err := peerdns.NewPeerDNS(peerDNSConfig)
+	d.Flags().AddFlagSet(fs)
+	d.RunE = func(cmd *cobra.Command, args []string) error {
+		pd, err := dns.NewPeerDNS(peerDNSConfig)
 		if err != nil {
 			return err
 		}
@@ -54,5 +54,5 @@ func NewPeerDNSCommand(ctx context.Context) *cobra.Command {
 		waitGroup.Wait()
 		return err
 	}
-	return registry
+	return d
 }

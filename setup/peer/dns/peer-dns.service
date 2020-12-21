@@ -7,7 +7,7 @@ Documentation=https://github.com/JulienBalestra/wireguard-stun
 Environment=$STATIC_PEERS=
 EnvironmentFile=/etc/wireguard-stun/environment
 
-ExecStart=/usr/local/bin/wireguard-stun peer-dns --static-peers $STATIC_PEERS --resolver-endpoint $RESOLVER_ENDPOINT
+ExecStart=/usr/local/bin/wireguard-stun peer dns --static-peers $STATIC_PEERS --resolver-endpoint $RESOLVER_ENDPOINT
 Restart=always
 RestartSec=30
 

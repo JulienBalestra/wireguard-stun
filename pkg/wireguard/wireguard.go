@@ -53,7 +53,7 @@ func NewWireguardClient(conf *Config) (*Wireguard, error) {
 	}, nil
 }
 
-func (w *Wireguard) GetPeers() ([]Peer, error) {
+func (w *Wireguard) GetPeers() ([]wgtypes.Peer, error) {
 	zctx := zap.L().With(
 		zap.String("device", w.conf.DeviceName),
 	)
@@ -69,8 +69,16 @@ func (w *Wireguard) GetPeers() ([]Peer, error) {
 		zctx.Error("failed to get wireguard device", zap.Error(err))
 		return nil, err
 	}
+	return device.Peers, nil
+}
+
+func (w *Wireguard) GetHashedPeers() ([]Peer, error) {
+	wgPeers, err := w.GetPeers()
+	if err != nil {
+		return nil, err
+	}
 	var peers []Peer
-	for _, p := range device.Peers {
+	for _, p := range wgPeers {
 		np := NewPeer(&p)
 		pctx := zap.L().With(
 			zap.String("publicKeyHash", np.PublicKeyHash),

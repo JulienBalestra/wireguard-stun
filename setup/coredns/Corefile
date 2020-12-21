@@ -1,0 +1,5 @@
+.:5335 {
+    wgsd mesh.local. wg0 sha1:7
+    prometheus
+    log
+}

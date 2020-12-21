@@ -181,7 +181,7 @@ func (r *Registry) updateCachedRecords(ctx context.Context) error {
 }
 
 func (r *Registry) updateCachedPeers() error {
-	peers, err := r.wg.GetPeers()
+	peers, err := r.wg.GetHashedPeers()
 	if err != nil {
 		return err
 	}

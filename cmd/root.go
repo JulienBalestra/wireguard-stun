@@ -6,6 +6,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/JulienBalestra/wireguard-stun/cmd/peer"
+	"github.com/JulienBalestra/wireguard-stun/cmd/registry"
+
 	"github.com/JulienBalestra/dry/pkg/version"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -51,8 +54,7 @@ func NewRootCommand(ctx context.Context) *cobra.Command {
 		time.Local = tz
 		return nil
 	}
-
-	root.AddCommand(NewRegistryCommand(ctx))
-	root.AddCommand(NewPeerDNSCommand(ctx))
+	root.AddCommand(registry.NewRegistryCommand(ctx))
+	root.AddCommand(peer.NewPeerCommand(ctx))
 	return root
 }
