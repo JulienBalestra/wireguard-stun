@@ -25,12 +25,12 @@ func NewDNSCommand(ctx context.Context) *cobra.Command {
 		WireguardConfig: &wireguard.Config{},
 	}
 
-	fs.StringVar(&peerDNSConfig.WireguardConfig.DeviceName, "device-name", "wg0", "wireguard device name")
+	fs.StringVar(&peerDNSConfig.WireguardConfig.DeviceName, "device-name", defaultDeviceName, "wireguard device name")
 	fs.StringVar(&peerDNSConfig.SRVRecordSuffix, "srv-record-suffix", "._wireguard._udp.mesh.local.", "SRV record suffix")
 	fs.StringVar(&peerDNSConfig.ResolverEndpoint, "resolver-endpoint", "", "dns resolver endpoint ip:port")
 	fs.DurationVar(&peerDNSConfig.DNSTimeout, "dns-timeout", time.Second*60, "per dns query timeout")
-	fs.StringArrayVar(&peerDNSConfig.StaticPeers, "static-peers", nil, "skip static peers by public key")
-	fs.DurationVar(&peerDNSConfig.ReconcileInterval, "reconcile-interval", time.Second*15, "reconciliation interval")
+	fs.StringArrayVar(&peerDNSConfig.StaticPeers, "static-peers", []string{wireguard.GetDevicePublicKey(defaultDeviceName)}, "skip static peers by public key")
+	fs.DurationVar(&peerDNSConfig.ReconcileInterval, "reconcile-interval", time.Hour, "reconciliation interval")
 	fs.DurationVar(&peerDNSConfig.HandshakeAge, "handshake-age", time.Minute*3, "skip recent handshake peers")
 
 	d.Flags().AddFlagSet(fs)

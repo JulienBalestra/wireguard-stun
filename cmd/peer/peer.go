@@ -6,6 +6,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const (
+	defaultDeviceName = "wg0"
+)
+
 func NewPeerCommand(ctx context.Context) *cobra.Command {
 	p := &cobra.Command{
 		Short:   "peer",
