@@ -6,13 +6,14 @@ const (
 	SubAPIPath = "/sub"
 	PubAPIPath = "/pub"
 
-	SubscriptionTTL   = time.Minute * 30
-	SubscriptionRenew = SubscriptionTTL - (time.Second - 10)
+	SubscriptionTTL   = time.Minute * 3
+	SubscriptionRenew = time.Minute
 )
 
 type PubSub struct {
-	URL       string `json:"url"`
-	PublicKey string `json:"publicKey"`
+	URL       string        `json:"url"`
+	PublicKey string        `json:"publicKey"`
+	TTL       time.Duration `json:"ttl"`
 }
 
 type Updates map[string]string

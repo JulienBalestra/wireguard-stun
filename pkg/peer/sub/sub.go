@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/JulienBalestra/dry/pkg/ticknow"
 	"github.com/JulienBalestra/wireguard-stun/pkg/pubsub"
 	"github.com/JulienBalestra/wireguard-stun/pkg/wireguard"
 	"github.com/gorilla/mux"
@@ -20,10 +21,11 @@ import (
 )
 
 type Config struct {
-	PublicKey         string
-	SubURL, PubURL    string
-	ReconcileInterval time.Duration
-	WireguardConfig   *wireguard.Config
+	PublicKey       string
+	SubURL, PubURL  string
+	RenewInterval   time.Duration
+	SubscriptionTTL time.Duration
+	WireguardConfig *wireguard.Config
 
 	ListenAddr string
 }
@@ -32,28 +34,18 @@ type Subscription struct {
 	conf *Config
 	wg   *wireguard.Wireguard
 
-	subBody    []byte
 	httpClient *http.Client
-	peerToSub  *pubsub.PubSub
 }
 
 func NewSubscription(conf *Config) (*Subscription, error) {
-	Peer := pubsub.PubSub{
-		URL:       conf.PubURL,
-		PublicKey: conf.PublicKey,
-	}
-	payload, err := json.Marshal(&Peer)
-	if err != nil {
-		return nil, err
-	}
+
 	wg, err := wireguard.NewWireguardClient(conf.WireguardConfig)
 	if err != nil {
 		return nil, err
 	}
 	s := &Subscription{
-		conf:    conf,
-		wg:      wg,
-		subBody: payload,
+		conf: conf,
+		wg:   wg,
 		httpClient: &http.Client{
 			Timeout: time.Second * 30,
 		},
@@ -123,7 +115,8 @@ func (s *Subscription) Run(ctx context.Context) error {
 	zctx := zap.L().With(
 		zap.String("subURL", s.conf.SubURL),
 		zap.String("listenAddr", s.conf.ListenAddr),
-		zap.Duration("subTTL", s.conf.ReconcileInterval),
+		zap.Duration("subTTL", s.conf.SubscriptionTTL),
+		zap.Duration("subRenew", s.conf.RenewInterval),
 	)
 	l, err := net.Listen("tcp4", s.conf.ListenAddr)
 	if err != nil {
@@ -142,45 +135,54 @@ func (s *Subscription) Run(ctx context.Context) error {
 		}
 		wg.Done()
 	}()
-	ticker := time.NewTicker(s.conf.ReconcileInterval)
-	defer ticker.Stop()
-	retry := time.After(0)
-
-	subFn := func() {
-		var buf bytes.Buffer
-		_, err = buf.Write(s.subBody)
-		if err != nil {
-			zctx.Error("failed to create body request", zap.Error(err))
-			return
-		}
-		subCtx, subCancel := context.WithTimeout(ctx, time.Second*10)
-		defer subCancel()
-		req, err := http.NewRequestWithContext(subCtx, http.MethodPost, s.conf.SubURL, &buf)
-		if err != nil {
-			zctx.Error("failed to create request", zap.Error(err))
-			return
-		}
-		resp, err := s.httpClient.Do(req)
-		if err != nil {
-			zctx.Error("failed to subscribe", zap.Error(err))
-			return
-		}
-		if resp.StatusCode != http.StatusOK {
-			zctx.Error("failed to subscribe; un-excepted status code", zap.Int("code", resp.StatusCode))
-			return
-		}
-		zctx.Info("successfully subscribed")
-	}
+	sub := ticknow.NewTickNow(ctx, s.conf.RenewInterval)
+	gc := ticknow.NewTickNow(ctx, time.Second*25)
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 
-		case <-retry:
-			subFn()
+		case <-sub.C:
+			Peer := pubsub.PubSub{
+				URL:       s.conf.PubURL,
+				PublicKey: s.conf.PublicKey,
+				TTL:       s.conf.SubscriptionTTL,
+			}
+			payload, err := json.Marshal(&Peer)
+			if err != nil {
+				zctx.Error("failed to marshal request", zap.Error(err))
+				continue
+			}
+			var buf bytes.Buffer
+			_, err = buf.Write(payload)
+			if err != nil {
+				zctx.Error("failed to create body request", zap.Error(err))
+				continue
+			}
+			subCtx, subCancel := context.WithTimeout(ctx, time.Second*10)
+			req, err := http.NewRequestWithContext(subCtx, http.MethodPost, s.conf.SubURL, &buf)
+			if err != nil {
+				zctx.Error("failed to create request", zap.Error(err))
+				subCancel()
+				continue
+			}
+			resp, err := s.httpClient.Do(req)
+			subCancel()
+			if err != nil {
+				zctx.Error("failed to subscribe", zap.Error(err))
+				continue
+			}
+			if resp.StatusCode != http.StatusOK {
+				zctx.Error("failed to subscribe; un-excepted status code", zap.Int("code", resp.StatusCode))
+				continue
+			}
+			zctx.Info("successfully subscribed")
 
-		case <-ticker.C:
-			subFn()
+		case <-gc.C:
+			err = s.wg.DiscardStalingEndpoints()
+			if err != nil {
+				zap.L().Error("failed to discard staling endpoints", zap.Error(err))
+			}
 		}
 	}
 }

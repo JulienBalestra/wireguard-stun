@@ -3,10 +3,10 @@ package dns
 import (
 	"context"
 	"errors"
-	"github.com/JulienBalestra/dry/pkg/ticknow"
 	"net"
 	"time"
 
+	"github.com/JulienBalestra/dry/pkg/ticknow"
 	"github.com/JulienBalestra/wireguard-stun/pkg/wireguard"
 	"github.com/miekg/dns"
 	"go.uber.org/zap"

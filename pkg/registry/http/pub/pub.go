@@ -84,6 +84,7 @@ func (p *Pub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	zctx := zap.L().With(
 		zap.String("publicKey", rp.PublicKey),
 		zap.String("endpoint", rp.URL),
+		zap.Duration("ttl", rp.TTL),
 	)
 	if rp.PublicKey == "" {
 		w.WriteHeader(http.StatusBadRequest)
@@ -131,8 +132,8 @@ func (p *Pub) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-
 	defer l.Close()
+
 	go http.Serve(l, p)
 
 	for {
@@ -164,10 +165,11 @@ func (p *Pub) Run(ctx context.Context) error {
 			pubCtx, cancel := context.WithTimeout(ctx, time.Second*2)
 			p.mu.Lock()
 			for pubkey, sub := range p.subscription {
-				if time.Since(sub.Timestamp) > pubsub.SubscriptionTTL {
+				if time.Since(sub.Timestamp) > sub.Remote.TTL {
 					delete(p.subscription, pubkey)
 					zap.L().With(
 						zap.String("subPublicKey", pubkey),
+						zap.Duration("ttl", sub.Remote.TTL),
 					).Info("subscription is expired")
 					continue
 				}
