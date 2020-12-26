@@ -179,10 +179,11 @@ func (s *Subscription) Run(ctx context.Context) error {
 			zctx.Info("successfully subscribed")
 
 		case <-gc.C:
-			err = s.wg.DiscardStalingEndpoints()
-			if err != nil {
-				zap.L().Error("failed to discard staling endpoints", zap.Error(err))
-			}
+			// TODO: do not discard registry endpoints
+			//err = s.wg.DiscardStalingEndpoints()
+			//if err != nil {
+			//	zap.L().Error("failed to discard staling endpoints", zap.Error(err))
+			//}
 		}
 	}
 }
