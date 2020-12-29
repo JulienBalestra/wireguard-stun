@@ -1,0 +1,24 @@
+[Unit]
+After=network-online.target
+Description=etcd
+
+[Service]
+Environment=ETCD_UNSUPPORTED_ARCH=
+Environment=ETCD_ADVERTISE_CLIENT_URLS=
+EnvironmentFile=/etc/etcd/environment
+
+ExecStart=/usr/local/bin/etcd \
+    --data-dir /var/lib/etcd \
+    --max-snapshots=1 \
+    --max-wals 1 \
+    --auto-compaction-mode=periodic \
+    --auto-compaction-retention=1h \
+    --listen-client-urls=http://0.0.0.0:2379 \
+    --logger=zap
+
+Restart=always
+RestartSec=10
+Type=notify
+
+[Install]
+WantedBy=multi-user.target
