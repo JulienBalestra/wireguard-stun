@@ -66,11 +66,13 @@ cat << EOF | sudo tee /etc/systemd/journald.conf.d/storage.conf
 Storage=volatile
 EOF
 
+# TODO: set according available memory
+SIZE=1024M
 cat << EOF | sudo tee /usr/local/bin/overlay
 #!/bin/bash
 
 mkdir -pv /mnt/var-overlay
-mount -t tmpfs -o size=512M tmpfs /mnt/var-overlay
+mount -t tmpfs -o size=${SIZE} tmpfs /mnt/var-overlay
 mkdir -pv /mnt/var-overlay/{upper,work}
 mount -t overlay overlay -olowerdir=/var,upperdir=/mnt/var-overlay/upper,workdir=/mnt/var-overlay/work /var
 EOF
