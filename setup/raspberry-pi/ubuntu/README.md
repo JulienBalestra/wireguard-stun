@@ -107,6 +107,19 @@ cat << EOF | sudo tee /etc/hosts
 EOF
 ```
 
+Disable systemd resolved
+```bash
+sudo systemctl disable systemd-resolved.service
+sudo systemctl mask systemd-resolved.service
+sudo rm -v /etc/resolv.conf
+
+cat << EOF | sudo tee /etc/resolv.conf
+nameserver 8.8.8.8
+nameserver 8.8.4.4
+nameserver 1.1.1.1
+EOF
+```
+
 Setup wireless access point bridged to ethernet:
 ```bash
 sudo mv -v /lib/systemd/network/80-wifi-adhoc.network /lib/systemd/network/80-wifi-adhoc.network.bak
