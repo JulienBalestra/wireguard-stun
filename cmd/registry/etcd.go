@@ -28,7 +28,7 @@ func NewEtcdCommand(ctx context.Context) *cobra.Command {
 	fs.StringArrayVar(&reconcileConfig.EtcdEndpoints, "etcd-endpoints", []string{"127.0.0.1:2379"}, "etcd endpoints")
 	fs.DurationVar(&reconcileConfig.ReconcileInterval, "reconcile-interval", time.Millisecond*100, "reconciliation interval")
 	fs.DurationVar(&reconcileConfig.ResyncInterval, "resync-interval", time.Minute*10, "full resync interval")
-	fs.StringVar(&reconcileConfig.ListenAddr, "listen-address", "0.0.0.0:8989", "listen address")
+	fs.StringVar(&reconcileConfig.ListenAddr, "listen-address", "127.0.0.1:8989", "listen address")
 
 	etcdCommand.Flags().AddFlagSet(fs)
 	etcdCommand.RunE = func(cmd *cobra.Command, args []string) error {
