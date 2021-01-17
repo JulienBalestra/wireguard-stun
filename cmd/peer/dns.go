@@ -21,21 +21,21 @@ func NewDNSCommand(ctx context.Context) *cobra.Command {
 	}
 	fs := &pflag.FlagSet{}
 
-	peerDNSConfig := &dns.Config{
-		WireguardConfig: &wireguard.Config{},
+	config := &dns.Config{
+		Wireguard: &wireguard.Config{},
 	}
 
-	fs.StringVar(&peerDNSConfig.WireguardConfig.DeviceName, "device-name", defaultDeviceName, "wireguard device name")
-	fs.StringVar(&peerDNSConfig.SRVRecordSuffix, "srv-record-suffix", "._wireguard._udp.mesh.local.", "SRV record suffix")
-	fs.StringVar(&peerDNSConfig.ResolverEndpoint, "resolver-endpoint", "", "dns resolver endpoint ip:port")
-	fs.DurationVar(&peerDNSConfig.DNSTimeout, "dns-timeout", time.Second*60, "per dns query timeout")
-	fs.StringArrayVar(&peerDNSConfig.StaticPeers, "static-peers", []string{wireguard.GetDevicePublicKey(defaultDeviceName)}, "skip static peers by public key")
-	fs.DurationVar(&peerDNSConfig.ReconcileInterval, "reconcile-interval", time.Hour, "reconciliation interval")
-	fs.DurationVar(&peerDNSConfig.HandshakeAge, "handshake-age", time.Minute*3, "skip recent handshake peers")
+	fs.StringVar(&config.Wireguard.DeviceName, "device-name", defaultDeviceName, "wireguard device name")
+	fs.StringVar(&config.SRVRecordSuffix, "srv-record-suffix", "._wireguard._udp.mesh.local.", "SRV record suffix")
+	fs.StringVar(&config.ResolverEndpoint, "resolver-endpoint", "", "dns resolver endpoint ip:port")
+	fs.DurationVar(&config.DNSTimeout, "dns-timeout", time.Second*60, "per dns query timeout")
+	fs.StringArrayVar(&config.StaticPeers, "static-peers", []string{wireguard.GetDevicePublicKey(defaultDeviceName)}, "skip static peers by public key")
+	fs.DurationVar(&config.ReconcileInterval, "reconcile-interval", time.Hour, "reconciliation interval")
+	fs.DurationVar(&config.HandshakeAge, "handshake-age", time.Minute*3, "skip recent handshake peers")
 
 	d.Flags().AddFlagSet(fs)
 	d.RunE = func(cmd *cobra.Command, args []string) error {
-		pd, err := dns.NewPeerDNS(peerDNSConfig)
+		pd, err := dns.NewPeerDNS(config)
 		if err != nil {
 			return err
 		}

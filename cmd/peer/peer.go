@@ -18,5 +18,6 @@ func NewPeerCommand(ctx context.Context) *cobra.Command {
 		Aliases: []string{"p"},
 	}
 	p.AddCommand(NewDNSCommand(ctx))
+	p.AddCommand(NewEtcdCommand(ctx))
 	return p
 }

@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"net"
+	"strconv"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -256,4 +258,25 @@ func GetDevicePublicKey(device string) string {
 		return ""
 	}
 	return d.PublicKey.String()
+}
+
+func ParseEndpoint(s string) (net.UDPAddr, error) {
+	u := net.UDPAddr{}
+	i := strings.Index(s, ":")
+	if i == -1 {
+		return u, errors.New("invalid endpoint: " + s)
+	}
+	if i+1 > len(s) {
+		return u, errors.New("invalid endpoint: " + s)
+	}
+	u.IP = net.ParseIP(s[:i])
+	if u.IP == nil {
+		return u, errors.New("invalid ip endpoint: " + s)
+	}
+	p, err := strconv.Atoi(s[i+1:])
+	if err != nil {
+		return u, err
+	}
+	u.Port = p
+	return u, nil
 }

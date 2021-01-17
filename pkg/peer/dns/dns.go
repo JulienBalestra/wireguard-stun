@@ -19,9 +19,9 @@ type Config struct {
 	ResolverEndpoint  string
 	ReconcileInterval time.Duration
 
-	WireguardConfig *wireguard.Config
-	StaticPeers     []string
-	HandshakeAge    time.Duration
+	Wireguard    *wireguard.Config
+	StaticPeers  []string
+	HandshakeAge time.Duration
 }
 
 type PeerDNS struct {
@@ -42,7 +42,7 @@ func NewPeerDNS(conf *Config) (*PeerDNS, error) {
 	if conf.ResolverEndpoint == "" {
 		return nil, errors.New("must provide a ResolverEndpoint")
 	}
-	wg, err := wireguard.NewWireguardClient(conf.WireguardConfig)
+	wg, err := wireguard.NewWireguardClient(conf.Wireguard)
 	if err != nil {
 		return nil, err
 	}
