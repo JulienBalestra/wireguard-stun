@@ -179,6 +179,7 @@ func (e *Etcd) updateEtcdState(ctx context.Context) error {
 	cli, err := clientv3.New(clientv3.Config{
 		Endpoints:   e.conf.EtcdEndpoints,
 		DialTimeout: time.Second * 5,
+		Context:     ctx,
 	})
 	if err != nil {
 		return err

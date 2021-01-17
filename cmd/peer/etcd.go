@@ -3,6 +3,7 @@ package peer
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/JulienBalestra/dry/pkg/signals"
 	"github.com/JulienBalestra/wireguard-stun/pkg/peer/etcd"
@@ -25,7 +26,9 @@ func NewEtcdCommand(ctx context.Context) *cobra.Command {
 	}
 
 	fs.StringVar(&config.Wireguard.DeviceName, "device-name", defaultDeviceName, "wireguard device name")
+	fs.StringVar(&config.EtcdPrefix, "etcd-prefix", "/peers/", "etcd prefix")
 	fs.StringArrayVar(&config.EtcdEndpoints, "etcd-endpoints", []string{"127.0.0.1:2379"}, "etcd endpoints")
+	fs.DurationVar(&config.ReconcileInterval, "reconcile-interval", time.Minute*15, "reconciliation interval")
 
 	d.Flags().AddFlagSet(fs)
 	d.RunE = func(cmd *cobra.Command, args []string) error {

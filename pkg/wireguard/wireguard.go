@@ -108,6 +108,18 @@ func (w *Wireguard) GetHashedPeers() ([]Peer, error) {
 	return peers, nil
 }
 
+func (w *Wireguard) GetIndexedPeers() (map[wgtypes.Key]wgtypes.Peer, error) {
+	peers, err := w.GetPeers()
+	if err != nil {
+		return nil, err
+	}
+	currentPeers := make(map[wgtypes.Key]wgtypes.Peer, len(peers))
+	for _, p := range peers {
+		currentPeers[p.PublicKey] = p
+	}
+	return currentPeers, nil
+}
+
 func (w *Wireguard) SetNewEndpoints(peerUpdates map[wgtypes.Key]net.UDPAddr) error {
 	zctx := zap.L().With(
 		zap.String("device", w.conf.DeviceName),
