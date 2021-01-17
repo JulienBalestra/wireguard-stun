@@ -1,0 +1,13 @@
+[Unit]
+Requires=etcd.servicd
+After=etcd.servicd
+Description=wireguard-stun registry etcd
+Documentation=https://github.com/JulienBalestra/wireguard-stun
+
+[Service]
+ExecStart=/usr/local/bin/wireguard-stun registry etcd
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
