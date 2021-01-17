@@ -14,6 +14,6 @@ func NewRegistryCommand(ctx context.Context) *cobra.Command {
 		Aliases: []string{"r"},
 	}
 	registryCmd.AddCommand(NewRoute53Command(ctx))
-	registryCmd.AddCommand(NewPubSubCommand(ctx))
+	registryCmd.AddCommand(NewEtcdCommand(ctx))
 	return registryCmd
 }
