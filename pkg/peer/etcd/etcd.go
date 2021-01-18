@@ -296,12 +296,12 @@ func (e *Etcd) Run(ctx context.Context) error {
 						case connectivity.TransientFailure:
 							zap.L().With(
 								zap.String("target", cli.ActiveConnection().Target()),
-							).Warn("Connectivity with transient failure, canceling watches")
+							).Warn("connectivity with transient failure, canceling watches")
 							cancel()
 						case connectivity.Connecting:
 							zap.L().With(
 								zap.String("target", cli.ActiveConnection().Target()),
-							).Warn("Lost connection, canceling watches")
+							).Warn("lost connection, canceling watches")
 							cancel()
 						}
 					case <-wCtx.Done():
