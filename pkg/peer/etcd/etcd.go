@@ -3,6 +3,7 @@ package etcd
 import (
 	"context"
 	"encoding/json"
+	"google.golang.org/grpc/connectivity"
 	"net"
 	"net/http"
 	"strings"
@@ -218,28 +219,48 @@ func (e *Etcd) Run(ctx context.Context) error {
 		return err
 	}
 
-	after := time.After(0)
-	ticker := ticknow.NewTickNow(ctx, time.Second)
+	after := time.After(time.Second)
+	connState := ticknow.NewTickNow(ctx, time.Second)
+	const waitBeforeRetry = time.Second * 15
 	for {
 		select {
 		case <-ctx.Done():
-			return cli.Close()
+			_ = cli.Watcher.Close()
+			_ = cli.ActiveConnection().Close()
+			_ = cli.Close()
+			return nil
 
-		case <-ticker.C:
+		case <-connState.C:
 			e.etcdConnState.WithLabelValues(
 				cli.ActiveConnection().GetState().String(),
 				cli.ActiveConnection().Target(),
 			).Inc()
 
 		case <-after:
+			switch cli.ActiveConnection().GetState() {
+			case connectivity.TransientFailure:
+				zap.L().With(
+					zap.String("target", cli.ActiveConnection().Target()),
+				).Info("Connectivity with transient failure, retrying")
+				after = time.After(waitBeforeRetry)
+				continue
+			case connectivity.Connecting:
+				zap.L().With(
+					zap.String("target", cli.ActiveConnection().Target()),
+				).Info("Still connecting")
+				after = time.After(waitBeforeRetry)
+				continue
+			case connectivity.Ready:
+				cli.ActiveConnection().ResetConnectBackoff()
+			}
+			peers, err := e.wg.GetPeers()
+			if err != nil {
+				zap.L().Error("failed to get peers", zap.Error(err))
+				after = time.After(waitBeforeRetry)
+				continue
+			}
+			e.seenPeers.Set(float64(len(peers)))
 			go func() {
-				peers, err := e.wg.GetPeers()
-				if err != nil {
-					zap.L().Error("failed to get peers", zap.Error(err))
-					after = time.After(time.Second * 10)
-					return
-				}
-				e.seenPeers.Set(float64(len(peers)))
 				wCtx, cancel := context.WithCancel(ctx)
 				wg := sync.WaitGroup{}
 				for _, p := range peers {
@@ -267,14 +288,29 @@ func (e *Etcd) Run(ctx context.Context) error {
 						zctx.Info("finished to watch")
 					}(p.PublicKey.String())
 				}
-				wg.Wait()
-				cancel()
-				_ = cli.Watcher.Close()
-				if err != nil {
-					after = time.After(time.Second * 10)
-					return
+				watchdog := ticknow.NewTickNow(wCtx, time.Millisecond*100)
+				for {
+					select {
+					case <-watchdog.C:
+						switch cli.ActiveConnection().GetState() {
+						case connectivity.TransientFailure:
+							zap.L().With(
+								zap.String("target", cli.ActiveConnection().Target()),
+							).Warn("Connectivity with transient failure, canceling watches")
+							cancel()
+						case connectivity.Connecting:
+							zap.L().With(
+								zap.String("target", cli.ActiveConnection().Target()),
+							).Warn("Lost connection, canceling watches")
+							cancel()
+						}
+					case <-wCtx.Done():
+						cancel()
+						wg.Wait()
+						after = time.After(waitBeforeRetry)
+						return
+					}
 				}
-				after = time.After(0)
 			}()
 		}
 	}
