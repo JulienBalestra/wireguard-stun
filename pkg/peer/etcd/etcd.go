@@ -4,9 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/JulienBalestra/dry/pkg/promregister"
+	"github.com/JulienBalestra/dry/pkg/ticknow"
+	"github.com/gorilla/mux"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/JulienBalestra/wireguard-stun/pkg/registry/etcd"
 	"github.com/JulienBalestra/wireguard-stun/pkg/wireguard"
@@ -16,19 +23,25 @@ import (
 )
 
 type Config struct {
-	EtcdEndpoint      string
-	ReconcileInterval time.Duration
-	EtcdPrefix        string
+	EtcdEndpoint string
+	EtcdPrefix   string
 
 	Wireguard     *wireguard.Config
 	EtcdEndpoints []string
 	ListenAddr    string
+	StaticPeers   []string
 }
 
 type Etcd struct {
 	conf *Config
 
-	wg *wireguard.Wireguard
+	wg          *wireguard.Wireguard
+	mux         *mux.Router
+	staticPeers map[wgtypes.Key]struct{}
+
+	receivedEvents *prometheus.CounterVec
+	etcdConnState  *prometheus.CounterVec
+	seenPeers      prometheus.Gauge
 }
 
 func NewPeerEtcd(conf *Config) (*Etcd, error) {
@@ -36,11 +49,53 @@ func NewPeerEtcd(conf *Config) (*Etcd, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	e := &Etcd{
-		conf: conf,
-		wg:   wg,
+	sp := make(map[wgtypes.Key]struct{}, len(conf.StaticPeers))
+	for _, p := range conf.StaticPeers {
+		k, err := wgtypes.ParseKey(p)
+		if err != nil {
+			return nil, err
+		}
+		sp[k] = struct{}{}
 	}
+	e := &Etcd{
+		conf:        conf,
+		staticPeers: sp,
+		wg:          wg,
+		mux:         mux.NewRouter(),
+		receivedEvents: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "wireguard_stun_peer_etcd_updates",
+			ConstLabels: prometheus.Labels{
+				"device": conf.Wireguard.DeviceName,
+			},
+		},
+			[]string{
+				"type",
+			},
+		),
+		etcdConnState: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "wireguard_stun_etcd_conn_state",
+		},
+			[]string{
+				"state",
+				"target",
+			},
+		),
+		seenPeers: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "wireguard_stun_peers",
+			ConstLabels: prometheus.Labels{
+				"device": conf.Wireguard.DeviceName,
+			},
+		}),
+	}
+	err = promregister.Register(
+		e.receivedEvents,
+		e.etcdConnState,
+		e.seenPeers,
+	)
+	if err != nil {
+		return nil, err
+	}
+	e.mux.NewRoute().Name("metrics").Path("/metrics").Methods(http.MethodGet).Handler(promhttp.Handler())
 	return e, nil
 }
 
@@ -53,25 +108,36 @@ func (e *Etcd) processEvents(ctx context.Context, w clientv3.WatchChan) error {
 		case update, ok := <-w:
 			if !ok {
 				zap.L().Info("context canceled")
+				e.receivedEvents.WithLabelValues("close").Inc()
 				return nil
 			}
 			if update.Canceled {
 				zap.L().Info("update canceled")
+				e.receivedEvents.WithLabelValues("cancel").Inc()
 				return nil
 			}
 			if update.Err() != nil {
 				zap.L().Error("error while watching", zap.Error(update.Err()))
+				e.receivedEvents.WithLabelValues("error").Inc()
 				return update.Err()
+			}
+			if update.IsProgressNotify() {
+				zap.L().Info("received progress notify")
+				e.receivedEvents.WithLabelValues("progress-notify").Inc()
+				continue
 			}
 			if len(update.Events) == 0 {
 				zap.L().Info("no event")
+				e.receivedEvents.WithLabelValues("empty").Inc()
 				continue
 			}
+			e.receivedEvents.WithLabelValues("events").Inc()
 			currentPeers, err := e.wg.GetIndexedPeers()
 			if err != nil {
 				zap.L().Error("failed to get peers", zap.Error(err))
 				continue
 			}
+			e.seenPeers.Set(float64(len(currentPeers)))
 			updates := make(map[wgtypes.Key]net.UDPAddr, len(update.Events))
 			for _, ev := range update.Events {
 				if ev.Type != clientv3.EventTypePut {
@@ -132,56 +198,84 @@ func (e *Etcd) processEvents(ctx context.Context, w clientv3.WatchChan) error {
 }
 
 func (e *Etcd) Run(ctx context.Context) error {
-	zap.L().Info("starting etcd reconciliation", zap.Duration("reconcileInterval", e.conf.ReconcileInterval))
-
-	cli, err := clientv3.New(clientv3.Config{
-		Endpoints:   e.conf.EtcdEndpoints,
-		DialTimeout: time.Second * 5,
-		Context:     ctx,
-	})
+	l, err := net.Listen("tcp4", e.conf.ListenAddr)
 	if err != nil {
 		return err
 	}
+
+	go http.Serve(l, e.mux)
+
+	zap.L().Info("starting etcd reconciliation")
+	cli, err := clientv3.New(clientv3.Config{
+		Endpoints:            e.conf.EtcdEndpoints,
+		DialTimeout:          time.Second * 5,
+		DialKeepAliveTime:    time.Minute,
+		DialKeepAliveTimeout: time.Second * 5,
+		Context:              ctx,
+	})
+	if err != nil {
+		zap.L().Error("failed to create etcd client", zap.Error(err))
+		return err
+	}
+
 	after := time.After(0)
+	ticker := ticknow.NewTickNow(ctx, time.Second)
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return cli.Close()
+
+		case <-ticker.C:
+			e.etcdConnState.WithLabelValues(
+				cli.ActiveConnection().GetState().String(),
+				cli.ActiveConnection().Target(),
+			).Inc()
 
 		case <-after:
-			peers, err := e.wg.GetPeers()
-			if err != nil {
-				zap.L().Error("failed to get peers", zap.Error(err))
-				after = time.After(time.Second * 5)
-				continue
-			}
-			wCtx, cancel := context.WithTimeout(ctx, e.conf.ReconcileInterval)
-			wg := sync.WaitGroup{}
-			for _, p := range peers {
-				wg.Add(1)
-				go func(s string) {
-					defer cancel()
-					defer wg.Done()
-					etcdKey := e.conf.EtcdPrefix + s
-					zctx := zap.L().With(
-						zap.String("publicKey", s),
-						zap.String("etcdKey", etcdKey),
-						zap.Float64("watchDurationSeconds", e.conf.ReconcileInterval.Seconds()),
-					)
-					// TODO: get and set before watch
-					zctx.Info("starting to watch")
-					w := cli.Watch(wCtx, etcdKey, clientv3.WithFilterDelete())
-					err = e.processEvents(ctx, w)
-					if err != nil {
-						zctx.Error("finished to watch on error", zap.Error(err))
-						after = time.After(time.Second * 15)
-						return
+			go func() {
+				peers, err := e.wg.GetPeers()
+				if err != nil {
+					zap.L().Error("failed to get peers", zap.Error(err))
+					after = time.After(time.Second * 10)
+					return
+				}
+				e.seenPeers.Set(float64(len(peers)))
+				wCtx, cancel := context.WithCancel(ctx)
+				wg := sync.WaitGroup{}
+				for _, p := range peers {
+					_, ok := e.staticPeers[p.PublicKey]
+					if ok {
+						continue
 					}
-					zctx.Info("finished to watch")
-				}(p.PublicKey.String())
-			}
-			wg.Wait()
-			cancel()
+					wg.Add(1)
+					go func(s string) {
+						defer cancel()
+						defer wg.Done()
+						etcdKey := e.conf.EtcdPrefix + s
+						zctx := zap.L().With(
+							zap.String("publicKey", s),
+							zap.String("etcdKey", etcdKey),
+						)
+						// TODO: get and set before watch
+						zctx.Info("starting to watch")
+						w := cli.Watch(wCtx, etcdKey, clientv3.WithFilterDelete(), clientv3.WithProgressNotify())
+						err = e.processEvents(ctx, w)
+						if err != nil {
+							zctx.Error("finished to watch on error", zap.Error(err))
+							return
+						}
+						zctx.Info("finished to watch")
+					}(p.PublicKey.String())
+				}
+				wg.Wait()
+				cancel()
+				_ = cli.Watcher.Close()
+				if err != nil {
+					after = time.After(time.Second * 10)
+					return
+				}
+				after = time.After(0)
+			}()
 		}
 	}
 }

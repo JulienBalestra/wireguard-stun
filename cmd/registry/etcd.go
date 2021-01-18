@@ -21,18 +21,20 @@ func NewEtcdCommand(ctx context.Context) *cobra.Command {
 	}
 	fs := &pflag.FlagSet{}
 
-	reconcileConfig := &etcd.Config{
+	config := &etcd.Config{
 		Wireguard: &wireguard.Config{},
 	}
-	fs.StringVar(&reconcileConfig.Wireguard.DeviceName, "device-name", "wg0", "wireguard device name")
-	fs.StringArrayVar(&reconcileConfig.EtcdEndpoints, "etcd-endpoints", []string{"127.0.0.1:2379"}, "etcd endpoints")
-	fs.DurationVar(&reconcileConfig.ReconcileInterval, "reconcile-interval", time.Millisecond*100, "reconciliation interval")
-	fs.DurationVar(&reconcileConfig.ResyncInterval, "resync-interval", time.Minute*10, "full resync interval")
-	fs.StringVar(&reconcileConfig.ListenAddr, "listen-address", "127.0.0.1:8989", "listen address")
+	fs.StringVar(&config.Wireguard.DeviceName, "device-name", "wg0", "wireguard device name")
+	fs.StringArrayVar(&config.EtcdEndpoints, "etcd-endpoints", []string{"127.0.0.1:2379"}, "etcd endpoints")
+	fs.DurationVar(&config.ReconcileInterval, "reconcile-interval", time.Millisecond*100, "reconciliation interval")
+	fs.DurationVar(&config.ResyncInterval, "resync-interval", time.Minute, "full resync interval")
+	fs.DurationVar(&config.CompactionInterval, "compaction-interval", time.Hour, "compaction interval")
+	fs.DurationVar(&config.DefragInterval, "defragment-interval", time.Hour*8, "defragment interval")
+	fs.StringVar(&config.ListenAddr, "listen-address", "127.0.0.1:8989", "listen address")
 
 	etcdCommand.Flags().AddFlagSet(fs)
 	etcdCommand.RunE = func(cmd *cobra.Command, args []string) error {
-		rec, err := etcd.NewEtcd(reconcileConfig)
+		rec, err := etcd.NewEtcd(config)
 		if err != nil {
 			return err
 		}

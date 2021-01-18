@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/JulienBalestra/dry/pkg/promregister"
+	"github.com/JulienBalestra/dry/pkg/ticknow"
 	"github.com/JulienBalestra/wireguard-stun/pkg/wireguard"
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus"
@@ -23,20 +24,25 @@ import (
 type Config struct {
 	Wireguard *wireguard.Config
 
-	ReconcileInterval time.Duration
-	ResyncInterval    time.Duration
-	HandshakeAge      time.Duration
+	ReconcileInterval  time.Duration
+	ResyncInterval     time.Duration
+	DefragInterval     time.Duration
+	CompactionInterval time.Duration
+	HandshakeAge       time.Duration
 
 	EtcdEndpoints []string
 	ListenAddr    string
 }
 
 type Etcd struct {
-	conf      *Config
-	c         *wgctrl.Client
-	seenPeers map[wgtypes.Key]*Peer
+	conf           *Config
+	wgClient       *wgctrl.Client
+	etcdClient     *clientv3.Client
+	seenPeers      map[wgtypes.Key]*Peer
+	latestRevision int64
 
 	updateMetrics     *prometheus.CounterVec
+	etcdConnState     *prometheus.CounterVec
 	updateEtcdMetrics *prometheus.CounterVec
 	seenPeersMetrics  prometheus.Gauge
 	mux               *mux.Router
@@ -50,15 +56,10 @@ func NewEtcd(conf *Config) (*Etcd, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, err = c.Device(conf.Wireguard.DeviceName)
-	if err != nil {
-		return nil, err
-	}
 	e := &Etcd{
-		conf:      conf,
-		c:         c,
-		mux:       mux.NewRouter(),
-		seenPeers: make(map[wgtypes.Key]*Peer),
+		conf:     conf,
+		mux:      mux.NewRouter(),
+		wgClient: c,
 		updateMetrics: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "wireguard_stun_registry_etcd_update_triggers",
 			ConstLabels: prometheus.Labels{
@@ -66,9 +67,17 @@ func NewEtcd(conf *Config) (*Etcd, error) {
 			},
 		},
 			[]string{
-				"new",
-				"endpoint",
+				"resync",
 				"handshake",
+				"endpoint",
+			},
+		),
+		etcdConnState: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "wireguard_stun_etcd_conn_state",
+		},
+			[]string{
+				"state",
+				"target",
 			},
 		),
 		updateEtcdMetrics: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -83,13 +92,18 @@ func NewEtcd(conf *Config) (*Etcd, error) {
 			},
 		),
 		seenPeersMetrics: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "wireguard_stun_registry_etcd_peers",
+			Name: "wireguard_stun_peers",
 			ConstLabels: prometheus.Labels{
 				"device": conf.Wireguard.DeviceName,
 			},
 		}),
 	}
-	err = promregister.Register(e.seenPeersMetrics, e.updateEtcdMetrics, e.updateMetrics)
+	err = promregister.Register(
+		e.seenPeersMetrics,
+		e.updateEtcdMetrics,
+		e.updateMetrics,
+		e.etcdConnState,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +117,7 @@ type Peer struct {
 }
 
 func (e *Etcd) updateEtcdState(ctx context.Context) error {
-	d, err := e.c.Device(e.conf.Wireguard.DeviceName)
+	d, err := e.wgClient.Device(e.conf.Wireguard.DeviceName)
 	if err != nil {
 		zap.L().Error("failed to get device", zap.Error(err))
 		return err
@@ -125,10 +139,10 @@ func (e *Etcd) updateEtcdState(ctx context.Context) error {
 				zap.String("publicKey", currentPeer.PublicKey.String()),
 				zap.String("endpoint", cp.Endpoint),
 				zap.Int64("handshakeTimestamp", cp.HandshakeTimestamp),
-				zap.Bool("newPeer", true),
+				zap.Bool("resyncPeer", true),
 				zap.Bool("handshakeUpdate", false),
 				zap.Bool("endpointUpdate", false),
-			).Info("new peer detected")
+			).Debug("resync peer detected")
 			e.updateMetrics.WithLabelValues(
 				"true",
 				"false",
@@ -143,10 +157,10 @@ func (e *Etcd) updateEtcdState(ctx context.Context) error {
 				zap.String("publicKey", currentPeer.PublicKey.String()),
 				zap.String("endpoint", cp.Endpoint),
 				zap.Int64("handshakeTimestamp", cp.HandshakeTimestamp),
-				zap.Bool("newPeer", false),
+				zap.Bool("resyncPeer", false),
 				zap.Bool("handshakeUpdate", true),
 				zap.Bool("endpointUpdate", endpointUpdate),
-			).Info("update on peer detected")
+			).Debug("update on peer detected")
 			e.updateMetrics.WithLabelValues(
 				"false",
 				"true",
@@ -160,10 +174,10 @@ func (e *Etcd) updateEtcdState(ctx context.Context) error {
 				zap.String("publicKey", currentPeer.PublicKey.String()),
 				zap.String("endpoint", cp.Endpoint),
 				zap.Int64("handshakeTimestamp", cp.HandshakeTimestamp),
-				zap.Bool("newPeer", false),
+				zap.Bool("resyncPeer", false),
 				zap.Bool("handshakeUpdate", false),
 				zap.Bool("endpointUpdate", true),
-			).Info("update on peer detected")
+			).Debug("update on peer detected")
 			e.updateMetrics.WithLabelValues(
 				"false",
 				"false",
@@ -175,14 +189,6 @@ func (e *Etcd) updateEtcdState(ctx context.Context) error {
 	}
 	if len(updates) == 0 {
 		return nil
-	}
-	cli, err := clientv3.New(clientv3.Config{
-		Endpoints:   e.conf.EtcdEndpoints,
-		DialTimeout: time.Second * 5,
-		Context:     ctx,
-	})
-	if err != nil {
-		return err
 	}
 	for key, peer := range updates {
 		etcdKey := "/peers/" + key.String()
@@ -199,7 +205,7 @@ func (e *Etcd) updateEtcdState(ctx context.Context) error {
 			continue
 		}
 		etcdData := string(b)
-		resp, err := cli.Txn(ctx).If(
+		resp, err := e.etcdClient.Txn(ctx).If(
 			clientv3.Compare(clientv3.Value(etcdKey), "=", etcdData),
 		).Else(
 			clientv3.OpPut(etcdKey, etcdData),
@@ -210,13 +216,20 @@ func (e *Etcd) updateEtcdState(ctx context.Context) error {
 			continue
 		}
 		e.seenPeers[key] = peer
-		zctx.With(
+		zctx = zctx.With(
 			zap.Bool("etcdPUT", !resp.Succeeded),
-		).Info("successfully updated etcd state")
+			zap.Int64("etcdRevision", resp.Header.GetRevision()),
+		)
 		e.updateEtcdMetrics.WithLabelValues("true", strconv.FormatBool(!resp.Succeeded)).Inc()
+		if resp.Succeeded {
+			zctx.Debug("etcd state already up to date")
+			continue
+		}
+		e.latestRevision = resp.Header.GetRevision()
+		zctx.Info("successfully updated etcd state")
 	}
 	e.seenPeersMetrics.Set(float64(len(e.seenPeers)))
-	return cli.Close()
+	return nil
 }
 
 func (e *Etcd) Run(ctx context.Context) error {
@@ -227,23 +240,83 @@ func (e *Etcd) Run(ctx context.Context) error {
 
 	go http.Serve(l, e.mux)
 
-	ticker := time.NewTicker(e.conf.ResyncInterval)
-	defer ticker.Stop()
+	e.etcdClient, err = clientv3.New(clientv3.Config{
+		Endpoints:            e.conf.EtcdEndpoints,
+		DialTimeout:          time.Second * 5,
+		DialKeepAliveTime:    time.Minute,
+		DialKeepAliveTimeout: time.Second * 5,
+		Context:              ctx,
+	})
+	if err != nil {
+		return err
+	}
+	resync := ticknow.NewTickNow(ctx, e.conf.ResyncInterval)
+	ticker := ticknow.NewTickNow(ctx, time.Second)
+	var reconcile <-chan time.Time
+
+	defrag := time.NewTicker(e.conf.DefragInterval)
+	defer defrag.Stop()
+
+	compaction := time.NewTicker(e.conf.CompactionInterval)
+	defer compaction.Stop()
 	for {
-		after := time.After(e.conf.ReconcileInterval)
 		select {
 		case <-ctx.Done():
+			_ = e.etcdClient.ActiveConnection().Close()
+			_ = e.etcdClient.Close()
+			_ = e.wgClient.Close()
 			return l.Close()
 
-		case <-ticker.C:
-			zap.L().Info("forcing a full resync")
-			e.seenPeers = make(map[wgtypes.Key]*Peer, len(e.seenPeers))
+		case <-compaction.C:
+			if e.latestRevision == 0 {
+				continue
+			}
+			zctx := zap.L().With(
+				zap.Int64("latestRevision", e.latestRevision),
+			)
+			_, err := e.etcdClient.Compact(ctx, e.latestRevision)
+			e.latestRevision = 0
+			if err != nil {
+				zctx.Error("failed to compact revision", zap.Error(err))
+				continue
+			}
+			zctx.Info("successfully compacted")
 
-		case <-after:
+		case <-defrag.C:
+			for _, ep := range e.etcdClient.Endpoints() {
+				zctx := zap.L().With(
+					zap.String("endpoint", ep),
+				)
+				_, err := e.etcdClient.Defragment(ctx, ep)
+				if err != nil {
+					zctx.Error("failed to defragment", zap.Error(err))
+					continue
+				}
+				zctx.Info("successfully defragment")
+			}
+
+		case <-ticker.C:
+			e.etcdConnState.WithLabelValues(
+				e.etcdClient.ActiveConnection().GetState().String(),
+				e.etcdClient.ActiveConnection().Target(),
+			).Inc()
+
+		case <-resync.C:
+			zap.L().Debug("forcing a full resync")
+			e.seenPeers = make(map[wgtypes.Key]*Peer, len(e.seenPeers))
+			if reconcile == nil {
+				zap.L().Info("starting reconciliation")
+				reconcile = time.After(0)
+			}
+
+		case <-reconcile:
 			err := e.updateEtcdState(ctx)
 			if err != nil {
 				zap.L().Error("failed to update etcd state", zap.Error(err))
+				reconcile = time.After(e.conf.ReconcileInterval * 10)
+				continue
 			}
+			reconcile = time.After(e.conf.ReconcileInterval)
 		}
 	}
 }
