@@ -13,7 +13,6 @@ func NewRegistryCommand(ctx context.Context) *cobra.Command {
 		Use:     "registry",
 		Aliases: []string{"r"},
 	}
-	registryCmd.AddCommand(NewRoute53Command(ctx))
 	registryCmd.AddCommand(NewEtcdCommand(ctx))
 	return registryCmd
 }
