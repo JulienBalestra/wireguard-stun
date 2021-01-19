@@ -29,7 +29,7 @@ type PeerDNS struct {
 
 	wg          *wireguard.Wireguard
 	dnsClient   *dns.Client
-	staticPeers map[string]struct{}
+	staticPeers map[wgtypes.Key]struct{}
 }
 
 func NewPeerDNS(conf *Config) (*PeerDNS, error) {
@@ -46,9 +46,25 @@ func NewPeerDNS(conf *Config) (*PeerDNS, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := make(map[string]struct{})
+
+	sc, err := wireguard.ParseStaticConfiguration(conf.Wireguard.DeviceName)
+	if err != nil {
+		return nil, err
+	}
+	staticPeers := make(map[wgtypes.Key]struct{}, len(conf.StaticPeers)+len(sc.Peers))
 	for _, elt := range conf.StaticPeers {
-		s[elt] = struct{}{}
+		k, err := wgtypes.ParseKey(elt)
+		if err != nil {
+			return nil, err
+		}
+		staticPeers[k] = struct{}{}
+	}
+
+	for _, p := range sc.Peers {
+		if p.Endpoint == nil {
+			continue
+		}
+		staticPeers[p.PublicKey] = struct{}{}
 	}
 	return &PeerDNS{
 		conf: conf,
@@ -57,7 +73,7 @@ func NewPeerDNS(conf *Config) (*PeerDNS, error) {
 		dnsClient: &dns.Client{
 			Timeout: time.Second * 30,
 		},
-		staticPeers: s,
+		staticPeers: staticPeers,
 	}, nil
 }
 
@@ -82,7 +98,7 @@ func (p *PeerDNS) ReconcilePeerEndpoints(ctx context.Context) error {
 
 	peerUpdates := make(map[wgtypes.Key]net.UDPAddr)
 	for _, peer := range peers {
-		_, ok := p.staticPeers[peer.PublicKey.String()]
+		_, ok := p.staticPeers[peer.PublicKey]
 		if ok {
 			continue
 		}

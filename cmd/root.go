@@ -3,20 +3,19 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
+	"github.com/JulienBalestra/dry/pkg/version"
+	"github.com/JulienBalestra/dry/pkg/zapconfig"
 	"github.com/JulienBalestra/wireguard-stun/cmd/peer"
 	"github.com/JulienBalestra/wireguard-stun/cmd/registry"
-
-	"github.com/JulienBalestra/dry/pkg/version"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"go.uber.org/zap"
 )
 
 func NewRootCommand(ctx context.Context) *cobra.Command {
-	zapConfig := zap.NewProductionConfig()
+	zapConfig := zapconfig.NewZapConfig()
 	zapLevel := zapConfig.Level.String()
 
 	root := &cobra.Command{
@@ -43,7 +42,6 @@ func NewRootCommand(ctx context.Context) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		logger = logger.With(zap.Int("pid", os.Getpid()))
 		zap.ReplaceGlobals(logger)
 		zap.RedirectStdLog(logger)
 

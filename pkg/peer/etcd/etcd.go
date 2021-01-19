@@ -3,12 +3,14 @@ package etcd
 import (
 	"context"
 	"encoding/json"
-	"google.golang.org/grpc/connectivity"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 
 	"github.com/JulienBalestra/dry/pkg/promregister"
 	"github.com/JulienBalestra/dry/pkg/ticknow"
@@ -50,17 +52,27 @@ func NewPeerEtcd(conf *Config) (*Etcd, error) {
 	if err != nil {
 		return nil, err
 	}
-	sp := make(map[wgtypes.Key]struct{}, len(conf.StaticPeers))
+	sc, err := wireguard.ParseStaticConfiguration(conf.Wireguard.DeviceName)
+	if err != nil {
+		return nil, err
+	}
+	staticPeers := make(map[wgtypes.Key]struct{}, len(conf.StaticPeers)+len(sc.Peers))
 	for _, p := range conf.StaticPeers {
 		k, err := wgtypes.ParseKey(p)
 		if err != nil {
 			return nil, err
 		}
-		sp[k] = struct{}{}
+		staticPeers[k] = struct{}{}
+	}
+	for _, p := range sc.Peers {
+		if p.Endpoint == nil {
+			continue
+		}
+		staticPeers[p.PublicKey] = struct{}{}
 	}
 	e := &Etcd{
 		conf:        conf,
-		staticPeers: sp,
+		staticPeers: staticPeers,
 		wg:          wg,
 		mux:         mux.NewRouter(),
 		receivedEvents: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -108,12 +120,12 @@ func (e *Etcd) processEvents(ctx context.Context, w clientv3.WatchChan) error {
 
 		case update, ok := <-w:
 			if !ok {
-				zap.L().Info("context canceled")
+				zap.L().Info("chan is closed")
 				e.receivedEvents.WithLabelValues("close").Inc()
 				return nil
 			}
 			if update.Canceled {
-				zap.L().Info("update canceled")
+				zap.L().Info("updates canceled")
 				e.receivedEvents.WithLabelValues("cancel").Inc()
 				return nil
 			}
@@ -133,6 +145,8 @@ func (e *Etcd) processEvents(ctx context.Context, w clientv3.WatchChan) error {
 				continue
 			}
 			e.receivedEvents.WithLabelValues("events").Inc()
+
+			// now the logic begins
 			currentPeers, err := e.wg.GetIndexedPeers()
 			if err != nil {
 				zap.L().Error("failed to get peers", zap.Error(err))
@@ -159,7 +173,7 @@ func (e *Etcd) processEvents(ctx context.Context, w clientv3.WatchChan) error {
 				}
 				cp, ok := currentPeers[k]
 				if !ok {
-					zctx.Info("unknown peer")
+					zctx.Warn("unknown peer")
 					continue
 				}
 				ep := &etcd.Peer{}
@@ -184,7 +198,7 @@ func (e *Etcd) processEvents(ctx context.Context, w clientv3.WatchChan) error {
 					zctx.Error("failed to parse endpoint", zap.Error(err))
 					continue
 				}
-				updates[cp.PublicKey] = u
+				updates[cp.PublicKey] = *u
 			}
 			if len(updates) == 0 {
 				continue
@@ -198,6 +212,118 @@ func (e *Etcd) processEvents(ctx context.Context, w clientv3.WatchChan) error {
 	}
 }
 
+func isReady(ctx context.Context, conn *grpc.ClientConn) bool {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*2)
+	defer cancel()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+
+		default:
+			state := conn.GetState()
+			zctx := zap.L().With(
+				zap.String("target", conn.Target()),
+				zap.String("state", state.String()),
+			)
+			switch state {
+			case connectivity.Connecting:
+				zctx.Info("connecting")
+				if !conn.WaitForStateChange(ctx, connectivity.Connecting) {
+					return false
+				}
+
+			case connectivity.TransientFailure:
+				zctx.Warn("connectivity with transient failure, retrying")
+				if !conn.WaitForStateChange(ctx, connectivity.TransientFailure) {
+					return false
+				}
+
+			case connectivity.Ready:
+				zap.L().With(
+					zap.String("target", conn.Target()),
+					zap.String("state", state.String()),
+				).Debug("connection is ready")
+				return true
+
+			case connectivity.Idle:
+				zctx.Debug("idle, retrying")
+				if !conn.WaitForStateChange(ctx, connectivity.Idle) {
+					return false
+				}
+
+			case connectivity.Shutdown:
+				zctx.Warn("shutting down, retrying")
+				if !conn.WaitForStateChange(ctx, connectivity.Shutdown) {
+					return false
+				}
+			}
+		}
+	}
+}
+
+func (e *Etcd) watchWireguardPeers(ctx context.Context, cli *clientv3.Client) error {
+	peers, err := e.wg.GetPeers()
+	if err != nil {
+		zap.L().Error("failed to get peers", zap.Error(err))
+		return err
+	}
+	e.seenPeers.Set(float64(len(peers)))
+
+	ctx, cancel := context.WithCancel(ctx)
+	wg := sync.WaitGroup{}
+	for _, p := range peers {
+		_, ok := e.staticPeers[p.PublicKey]
+		if ok {
+			continue
+		}
+		wg.Add(1)
+		go func(s string) {
+			defer cancel()
+			defer wg.Done()
+			etcdKey := e.conf.EtcdPrefix + s
+			zctx := zap.L().With(
+				zap.String("publicKey", s),
+				zap.String("etcdKey", etcdKey),
+			)
+			// TODO: get and set before watch
+			zctx.Info("starting to watch")
+			w := cli.Watch(ctx, etcdKey, clientv3.WithFilterDelete(), clientv3.WithProgressNotify())
+			err = e.processEvents(ctx, w)
+			if err != nil {
+				zctx.Error("finished to watch on error", zap.Error(err))
+				return
+			}
+			zctx.Info("finished to watch")
+		}(p.PublicKey.String())
+	}
+	watchdog := time.NewTicker(time.Millisecond * 100)
+	for {
+		select {
+		case <-ctx.Done():
+			watchdog.Stop()
+			cancel()
+			wg.Wait()
+			return nil
+
+		case <-watchdog.C:
+			state := cli.ActiveConnection().GetState()
+			switch state {
+			case connectivity.TransientFailure:
+				zap.L().With(
+					zap.String("state", state.String()),
+				).Warn("connectivity with transient failure, canceling watches")
+				cancel()
+			case connectivity.Connecting:
+				zap.L().With(
+					zap.String("state", state.String()),
+				).Warn("lost connection, canceling watches")
+				cancel()
+			}
+		}
+	}
+}
+
 func (e *Etcd) Run(ctx context.Context) error {
 	l, err := net.Listen("tcp4", e.conf.ListenAddr)
 	if err != nil {
@@ -206,112 +332,60 @@ func (e *Etcd) Run(ctx context.Context) error {
 
 	go http.Serve(l, e.mux)
 
-	zap.L().Info("starting etcd reconciliation")
 	cli, err := clientv3.New(clientv3.Config{
 		Endpoints:            e.conf.EtcdEndpoints,
-		DialTimeout:          time.Second * 5,
+		DialTimeout:          time.Second * 15,
 		DialKeepAliveTime:    time.Minute,
-		DialKeepAliveTimeout: time.Second * 5,
+		DialKeepAliveTimeout: time.Second * 15,
 		Context:              ctx,
+		PermitWithoutStream:  true,
 	})
 	if err != nil {
 		zap.L().Error("failed to create etcd client", zap.Error(err))
 		return err
 	}
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		connState := ticknow.NewTickNow(ctx, time.Second)
+		for {
+			select {
+			case <-ctx.Done():
+				wg.Done()
+				return
 
-	after := time.After(time.Second)
-	connState := ticknow.NewTickNow(ctx, time.Second)
-	const waitBeforeRetry = time.Second * 15
+			case <-connState.C:
+				e.etcdConnState.WithLabelValues(
+					cli.ActiveConnection().GetState().String(),
+					cli.ActiveConnection().Target(),
+				).Inc()
+			}
+		}
+	}()
+
+	after := time.After(0)
 	for {
 		select {
 		case <-ctx.Done():
 			_ = cli.Watcher.Close()
 			_ = cli.ActiveConnection().Close()
 			_ = cli.Close()
+			wg.Wait()
 			return nil
 
-		case <-connState.C:
-			e.etcdConnState.WithLabelValues(
-				cli.ActiveConnection().GetState().String(),
-				cli.ActiveConnection().Target(),
-			).Inc()
-
 		case <-after:
-			switch cli.ActiveConnection().GetState() {
-			case connectivity.TransientFailure:
-				zap.L().With(
-					zap.String("target", cli.ActiveConnection().Target()),
-				).Info("Connectivity with transient failure, retrying")
-				after = time.After(waitBeforeRetry)
+			var wait time.Duration = 0
+
+			zap.L().Info("starting etcd reconciliation")
+			if !isReady(ctx, cli.ActiveConnection()) {
+				after = time.After(wait)
 				continue
-			case connectivity.Connecting:
-				zap.L().With(
-					zap.String("target", cli.ActiveConnection().Target()),
-				).Info("Still connecting")
-				after = time.After(waitBeforeRetry)
-				continue
-			case connectivity.Ready:
-				cli.ActiveConnection().ResetConnectBackoff()
 			}
-			peers, err := e.wg.GetPeers()
+			err = e.watchWireguardPeers(ctx, cli)
 			if err != nil {
-				zap.L().Error("failed to get peers", zap.Error(err))
-				after = time.After(waitBeforeRetry)
-				continue
+				wait = time.Second
 			}
-			e.seenPeers.Set(float64(len(peers)))
-			go func() {
-				wCtx, cancel := context.WithCancel(ctx)
-				wg := sync.WaitGroup{}
-				for _, p := range peers {
-					_, ok := e.staticPeers[p.PublicKey]
-					if ok {
-						continue
-					}
-					wg.Add(1)
-					go func(s string) {
-						defer cancel()
-						defer wg.Done()
-						etcdKey := e.conf.EtcdPrefix + s
-						zctx := zap.L().With(
-							zap.String("publicKey", s),
-							zap.String("etcdKey", etcdKey),
-						)
-						// TODO: get and set before watch
-						zctx.Info("starting to watch")
-						w := cli.Watch(wCtx, etcdKey, clientv3.WithFilterDelete(), clientv3.WithProgressNotify())
-						err = e.processEvents(ctx, w)
-						if err != nil {
-							zctx.Error("finished to watch on error", zap.Error(err))
-							return
-						}
-						zctx.Info("finished to watch")
-					}(p.PublicKey.String())
-				}
-				watchdog := ticknow.NewTickNow(wCtx, time.Millisecond*100)
-				for {
-					select {
-					case <-watchdog.C:
-						switch cli.ActiveConnection().GetState() {
-						case connectivity.TransientFailure:
-							zap.L().With(
-								zap.String("target", cli.ActiveConnection().Target()),
-							).Warn("connectivity with transient failure, canceling watches")
-							cancel()
-						case connectivity.Connecting:
-							zap.L().With(
-								zap.String("target", cli.ActiveConnection().Target()),
-							).Warn("lost connection, canceling watches")
-							cancel()
-						}
-					case <-wCtx.Done():
-						cancel()
-						wg.Wait()
-						after = time.After(waitBeforeRetry)
-						return
-					}
-				}
-			}()
+			after = time.After(wait)
 		}
 	}
 }

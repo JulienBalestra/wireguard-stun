@@ -29,7 +29,7 @@ func NewDNSCommand(ctx context.Context) *cobra.Command {
 	fs.StringVar(&config.SRVRecordSuffix, "srv-record-suffix", "._wireguard._udp.mesh.local.", "SRV record suffix")
 	fs.StringVar(&config.ResolverEndpoint, "resolver-endpoint", "", "dns resolver endpoint ip:port")
 	fs.DurationVar(&config.DNSTimeout, "dns-timeout", time.Second*60, "per dns query timeout")
-	fs.StringArrayVar(&config.StaticPeers, "static-peers", []string{wireguard.GetDevicePublicKey(defaultDeviceName)}, "skip static peers by public key")
+	fs.StringArrayVar(&config.StaticPeers, "static-peers", nil, "skip static peers by public key")
 	fs.DurationVar(&config.ReconcileInterval, "reconcile-interval", time.Hour, "reconciliation interval")
 	fs.DurationVar(&config.HandshakeAge, "handshake-age", time.Minute*3, "skip recent handshake peers")
 

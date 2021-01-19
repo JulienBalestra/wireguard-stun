@@ -1,10 +1,13 @@
 package wireguard
 
 import (
+	"bufio"
 	"crypto/sha1"
 	"encoding/hex"
 	"errors"
 	"net"
+	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -272,23 +275,118 @@ func GetDevicePublicKey(device string) string {
 	return d.PublicKey.String()
 }
 
-func ParseEndpoint(s string) (net.UDPAddr, error) {
+func ParseEndpoint(s string) (*net.UDPAddr, error) {
 	u := net.UDPAddr{}
 	i := strings.Index(s, ":")
 	if i == -1 {
-		return u, errors.New("invalid endpoint: " + s)
+		return nil, errors.New("invalid endpoint: " + s)
 	}
 	if i+1 > len(s) {
-		return u, errors.New("invalid endpoint: " + s)
+		return nil, errors.New("invalid endpoint: " + s)
 	}
 	u.IP = net.ParseIP(s[:i])
 	if u.IP == nil {
-		return u, errors.New("invalid ip endpoint: " + s)
+		return nil, errors.New("invalid ip endpoint: " + s)
 	}
 	p, err := strconv.Atoi(s[i+1:])
 	if err != nil {
-		return u, err
+		return nil, err
 	}
 	u.Port = p
-	return u, nil
+	return &u, nil
+}
+
+type DeviceConfiguration struct {
+	Peers []wgtypes.Peer
+}
+
+func ParseStaticConfiguration(device string) (*DeviceConfiguration, error) {
+	const basePath = "/etc/wireguard/"
+	const extension = ".conf"
+
+	file, err := os.Open(path.Join(basePath, device+extension))
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	sc := &DeviceConfiguration{}
+	var sp *wgtypes.Peer = nil
+	scanner := bufio.NewScanner(file)
+	for {
+		if !scanner.Scan() {
+			if sp != nil && sp.PublicKey.String() != "" {
+				sc.Peers = append(sc.Peers, *sp)
+			}
+			break
+		}
+		line := scanner.Text()
+		if line == "[Peer]" {
+			if sp != nil && sp.PublicKey.String() != "" {
+				sc.Peers = append(sc.Peers, *sp)
+			}
+			sp = &wgtypes.Peer{}
+			continue
+		}
+		if sp == nil {
+			continue
+		}
+		if strings.HasPrefix(line, "PublicKey") {
+			// "PublicKey="
+			s := line[9+1:]
+			s = strings.Trim(s, " ")
+			s = strings.TrimLeft(s, " =")
+			sp.PublicKey, err = wgtypes.ParseKey(s)
+			if err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "PresharedKey") {
+			// "PresharedKey="
+			s := line[12+1:]
+			s = strings.Trim(s, " ")
+			s = strings.TrimLeft(s, " =")
+			sp.PresharedKey, err = wgtypes.ParseKey(s)
+			if err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "PersistentKeepalive") {
+			// "PersistentKeepalive="
+			s := line[19+1:]
+			s = strings.Trim(s, " =")
+			sp.PersistentKeepaliveInterval, err = time.ParseDuration(s + "s")
+			if err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "AllowedIPs") {
+			// "AllowedIPs="
+			s := line[10+1:]
+			s = strings.Trim(s, " =")
+			for _, elt := range strings.Split(s, ",") {
+				elt = strings.Trim(elt, " ")
+				_, i, err := net.ParseCIDR(elt)
+				if err != nil {
+					return nil, err
+				}
+				sp.AllowedIPs = append(sp.AllowedIPs, *i)
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "Endpoint") {
+			// "Endpoint="
+			s := line[8+1:]
+			s = strings.Trim(s, " =")
+			sp.Endpoint, err = ParseEndpoint(s)
+			if err != nil {
+				return nil, err
+			}
+			continue
+		}
+	}
+	return sc, nil
 }
