@@ -17,37 +17,29 @@ import (
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
-const (
-	DiscardIP   = "127.0.0.1"
-	DiscardPort = 9 // IANA discard
-)
-
 type Config struct {
-	DeviceName              string
-	DiscardStalingEndpoints time.Duration
-	DiscardGracePeriod      time.Duration
+	DeviceName string
 }
 
 type Wireguard struct {
 	conf *Config
-
-	discardGracePeriod map[wgtypes.Key]time.Time
-	discardEndpoint    *net.UDPAddr
 }
 
-type Peer struct {
+type PeerSHA struct {
 	wgtypes.Peer
 
-	PublicKeyHash string
+	PublicKeyShortSha1 string
+	PublicKeySha1      string
 }
 
-func NewPeer(peer *wgtypes.Peer) *Peer {
+func NewPeer(peer *wgtypes.Peer) *PeerSHA {
 	h := sha1.New()
 	_, _ = h.Write(peer.PublicKey[:])
-	hash := hex.EncodeToString(h.Sum(nil))[:7]
-	return &Peer{
-		Peer:          *peer,
-		PublicKeyHash: hash,
+	hash := hex.EncodeToString(h.Sum(nil))
+	return &PeerSHA{
+		Peer:               *peer,
+		PublicKeyShortSha1: hash[:7],
+		PublicKeySha1:      hash,
 	}
 }
 
@@ -65,12 +57,7 @@ func NewWireguardClient(conf *Config) (*Wireguard, error) {
 		return nil, err
 	}
 	return &Wireguard{
-		conf:               conf,
-		discardGracePeriod: make(map[wgtypes.Key]time.Time),
-		discardEndpoint: &net.UDPAddr{
-			IP:   net.ParseIP(DiscardIP),
-			Port: DiscardPort,
-		},
+		conf: conf,
 	}, nil
 }
 
@@ -93,16 +80,16 @@ func (w *Wireguard) GetPeers() ([]wgtypes.Peer, error) {
 	return device.Peers, nil
 }
 
-func (w *Wireguard) GetHashedPeers() ([]Peer, error) {
+func (w *Wireguard) GetHashedPeers() ([]PeerSHA, error) {
 	wgPeers, err := w.GetPeers()
 	if err != nil {
 		return nil, err
 	}
-	var peers []Peer
+	var peers []PeerSHA
 	for _, p := range wgPeers {
 		np := NewPeer(&p)
 		pctx := zap.L().With(
-			zap.String("publicKeyHash", np.PublicKeyHash),
+			zap.String("publicKeyHash", np.PublicKeyShortSha1),
 			zap.String("publicKey", np.PublicKey.String()),
 		)
 		pctx.Debug("discovering peer", zap.String("endpoint", np.Endpoint.String()))
@@ -176,90 +163,6 @@ func (w *Wireguard) SetNewEndpoints(peerUpdates map[wgtypes.Key]net.UDPAddr) err
 		Peers:        peerConfigs,
 	})
 	return err
-}
-
-func (w *Wireguard) DiscardStalingEndpoints() error {
-	if w.conf.DiscardGracePeriod == 0 {
-		return nil
-	}
-	zctx := zap.L().With(
-		zap.String("device", w.conf.DeviceName),
-	)
-	wgc, err := wgctrl.New()
-	if err != nil {
-		zctx.Error("failed to create wireguard client", zap.Error(err))
-		return err
-	}
-	defer wgc.Close()
-	device, err := wgc.Device(w.conf.DeviceName)
-	if err != nil {
-		zctx.Error("failed to get wireguard device", zap.Error(err))
-		return err
-	}
-
-	var peerConfigs []wgtypes.PeerConfig
-	for _, p := range device.Peers {
-		if p.Endpoint == nil {
-			delete(w.discardGracePeriod, p.PublicKey)
-			continue
-		}
-		if p.Endpoint.String() == w.discardEndpoint.String() {
-			delete(w.discardGracePeriod, p.PublicKey)
-			continue
-		}
-		if time.Since(p.LastHandshakeTime) < w.conf.DiscardStalingEndpoints {
-			delete(w.discardGracePeriod, p.PublicKey)
-			continue
-		}
-		gc, ok := w.discardGracePeriod[p.PublicKey]
-		if !ok {
-			w.discardGracePeriod[p.PublicKey] = time.Now()
-			zctx.Info("endpoint candidate for discard",
-				zap.String("publicKey", p.PublicKey.String()),
-				zap.String("endpoint", p.Endpoint.String()),
-			)
-			continue
-		}
-		if time.Since(gc) < w.conf.DiscardGracePeriod {
-			zctx.Info("endpoint candidate for discard under grace period",
-				zap.String("publicKey", p.PublicKey.String()),
-				zap.String("endpoint", p.Endpoint.String()),
-			)
-			continue
-		}
-
-		zctx.Info("endpoint marked for discard",
-			zap.String("publicKey", p.PublicKey.String()),
-			zap.String("endpoint", p.Endpoint.String()),
-		)
-		cfg := wgtypes.PeerConfig{
-			PublicKey:                   p.PublicKey,
-			UpdateOnly:                  false,
-			PresharedKey:                &p.PresharedKey,
-			Endpoint:                    w.discardEndpoint,
-			PersistentKeepaliveInterval: &p.PersistentKeepaliveInterval,
-			ReplaceAllowedIPs:           false,
-			AllowedIPs:                  p.AllowedIPs,
-		}
-		peerConfigs = append(peerConfigs, cfg)
-		delete(w.discardGracePeriod, p.PublicKey)
-	}
-	for k, t := range w.discardGracePeriod {
-		if time.Since(t) > w.conf.DiscardGracePeriod {
-			delete(w.discardGracePeriod, k)
-		}
-	}
-	if len(peerConfigs) == 0 {
-		zap.L().Info("no peer endpoint to discard yet", zap.Int("candidates", len(w.discardGracePeriod)))
-		return nil
-	}
-	return wgc.ConfigureDevice(w.conf.DeviceName, wgtypes.Config{
-		PrivateKey:   &device.PrivateKey,
-		ListenPort:   &device.ListenPort,
-		FirewallMark: &device.FirewallMark,
-		ReplacePeers: false,
-		Peers:        peerConfigs,
-	})
 }
 
 func GetDevicePublicKey(device string) string {

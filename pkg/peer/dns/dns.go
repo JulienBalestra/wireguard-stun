@@ -103,10 +103,10 @@ func (p *PeerDNS) ReconcilePeerEndpoints(ctx context.Context) error {
 			continue
 		}
 		handshakeAge := time.Since(peer.LastHandshakeTime)
-		srvQuery := peer.PublicKeyHash + p.conf.SRVRecordSuffix
+		srvQuery := peer.PublicKeyShortSha1 + p.conf.SRVRecordSuffix
 		zctx := zap.L().With(
 			zap.String("publicKey", peer.PublicKey.String()),
-			zap.String("publicKeyHash", peer.PublicKeyHash),
+			zap.String("publicKeyHash", peer.PublicKeyShortSha1),
 			zap.String("srvQuery", srvQuery),
 			zap.String("resolverEndpoint", p.conf.ResolverEndpoint),
 			zap.Duration("handshakeAge", handshakeAge),

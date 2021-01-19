@@ -29,7 +29,7 @@ type Registry struct {
 	r53c *Client
 
 	mu            sync.RWMutex
-	peers         []wireguard.Peer
+	peers         []wireguard.PeerSHA
 	srvRecordSets map[string]*route53.ResourceRecordSet
 	aRecordSets   map[string]*route53.ResourceRecordSet
 }
@@ -56,7 +56,7 @@ type peerRecord struct {
 	recordType string
 	value      string
 	toDelete   bool
-	peer       *wireguard.Peer
+	peer       *wireguard.PeerSHA
 }
 
 type peerRecords struct {
@@ -137,17 +137,17 @@ func (r *Registry) processRecordChange(upserts, deletes []*route53.Change, recor
 	return upserts, deletes
 }
 
-func (r *Registry) newPeerRecords(peer *wireguard.Peer) *peerRecords {
+func (r *Registry) newPeerRecords(peer *wireguard.PeerSHA) *peerRecords {
 	toDelete := time.Since(peer.LastHandshakeTime) > r.conf.HandshakeAge
 	prs := &peerRecords{
 		srv: &peerRecord{
-			name:       peer.PublicKeyHash + r.conf.Route53Config.SRVRecordSuffix,
+			name:       peer.PublicKeyShortSha1 + r.conf.Route53Config.SRVRecordSuffix,
 			recordType: route53.RRTypeSrv,
 			toDelete:   toDelete,
 			peer:       peer,
 		},
 		a: &peerRecord{
-			name:       peer.PublicKeyHash + r.conf.Route53Config.ARecordSuffix,
+			name:       peer.PublicKeyShortSha1 + r.conf.Route53Config.ARecordSuffix,
 			recordType: route53.RRTypeA,
 			toDelete:   toDelete,
 			peer:       peer,
@@ -156,7 +156,7 @@ func (r *Registry) newPeerRecords(peer *wireguard.Peer) *peerRecords {
 	zap.L().Debug("building peer record specs",
 		zap.Duration("sinceLastHandshake", time.Since(peer.LastHandshakeTime)),
 		zap.String("publicKey", peer.PublicKey.String()),
-		zap.String("publicKeyHash", peer.PublicKeyHash),
+		zap.String("publicKeyHash", peer.PublicKeyShortSha1),
 		zap.Bool("toDelete", toDelete),
 	)
 	if toDelete {
