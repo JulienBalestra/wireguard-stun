@@ -79,7 +79,7 @@ func NewPeerDNS(conf *Config) (*PeerDNS, error) {
 
 func (p *PeerDNS) Run(ctx context.Context) error {
 	zap.L().Info("starting dns reconciliation", zap.Duration("reconcileInterval", p.conf.ReconcileInterval))
-	ticker := ticknow.NewTickNow(ctx, p.conf.ReconcileInterval)
+	ticker := ticknow.NewTickNowWithContext(ctx, p.conf.ReconcileInterval)
 	for {
 		select {
 		case <-ctx.Done():
