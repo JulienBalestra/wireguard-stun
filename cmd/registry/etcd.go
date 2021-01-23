@@ -27,7 +27,7 @@ func NewEtcdCommand(ctx context.Context) *cobra.Command {
 	fs.StringVar(&config.Wireguard.DeviceName, "device-name", "wg0", "wireguard device name")
 	fs.StringArrayVar(&config.EtcdEndpoints, "etcd-endpoints", []string{"127.0.0.1:2379"}, "etcd endpoints")
 	fs.DurationVar(&config.ReconcileInterval, "reconcile-interval", time.Millisecond*100, "reconciliation interval")
-	fs.DurationVar(&config.ResyncInterval, "resync-interval", time.Minute, "full resync interval")
+	fs.DurationVar(&config.ReSyncInterval, "resync-interval", time.Minute, "full resync interval")
 	fs.DurationVar(&config.CompactionInterval, "compaction-interval", time.Hour, "compaction interval")
 	fs.DurationVar(&config.DefragInterval, "defragment-interval", time.Hour*8, "defragment interval")
 	fs.StringVar(&config.ListenAddr, "listen-address", "127.0.0.1:8989", "listen address")

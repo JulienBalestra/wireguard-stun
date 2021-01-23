@@ -25,7 +25,7 @@ type Config struct {
 	Wireguard *wireguard.Config
 
 	ReconcileInterval  time.Duration
-	ResyncInterval     time.Duration
+	ReSyncInterval     time.Duration
 	DefragInterval     time.Duration
 	CompactionInterval time.Duration
 	HandshakeAge       time.Duration
@@ -35,11 +35,11 @@ type Config struct {
 }
 
 type Etcd struct {
-	conf           *Config
-	wgClient       *wgctrl.Client
-	etcdClient     *clientv3.Client
-	seenPeers      map[wgtypes.Key]*Peer
-	latestRevision int64
+	conf               *Config
+	wgClient           *wgctrl.Client
+	etcdClient         *clientv3.Client
+	seenPeers          map[wgtypes.Key]*Peer
+	compactionRevision int64
 
 	updateMetrics     *prometheus.CounterVec
 	etcdConnState     *prometheus.CounterVec
@@ -225,7 +225,7 @@ func (e *Etcd) updateEtcdState(ctx context.Context) error {
 			zctx.Debug("etcd state already up to date")
 			continue
 		}
-		e.latestRevision = resp.Header.GetRevision()
+		e.compactionRevision = resp.Header.GetRevision()
 		zctx.Info("successfully updated etcd state")
 	}
 	e.seenPeersMetrics.Set(float64(len(e.seenPeers)))
@@ -250,8 +250,8 @@ func (e *Etcd) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	resync := ticknow.NewTickNow(ctx, e.conf.ResyncInterval)
-	ticker := ticknow.NewTickNow(ctx, time.Second)
+	reSync := ticknow.NewTickNowWithContext(ctx, e.conf.ReSyncInterval)
+	ticker := ticknow.NewTickNowWithContext(ctx, time.Second)
 	var reconcile <-chan time.Time
 
 	defrag := time.NewTicker(e.conf.DefragInterval)
@@ -265,17 +265,18 @@ func (e *Etcd) Run(ctx context.Context) error {
 			_ = e.etcdClient.ActiveConnection().Close()
 			_ = e.etcdClient.Close()
 			_ = e.wgClient.Close()
-			return l.Close()
+			_ = l.Close()
+			return nil
 
 		case <-compaction.C:
-			if e.latestRevision == 0 {
+			if e.compactionRevision == 0 {
 				continue
 			}
 			zctx := zap.L().With(
-				zap.Int64("latestRevision", e.latestRevision),
+				zap.Int64("compactionRevision", e.compactionRevision),
 			)
-			_, err := e.etcdClient.Compact(ctx, e.latestRevision)
-			e.latestRevision = 0
+			_, err = e.etcdClient.Compact(ctx, e.compactionRevision)
+			e.compactionRevision = 0
 			if err != nil {
 				zctx.Error("failed to compact revision", zap.Error(err))
 				continue
@@ -283,16 +284,24 @@ func (e *Etcd) Run(ctx context.Context) error {
 			zctx.Info("successfully compacted")
 
 		case <-defrag.C:
+			var after time.Duration = 0
 			for _, ep := range e.etcdClient.Endpoints() {
-				zctx := zap.L().With(
-					zap.String("endpoint", ep),
-				)
-				_, err := e.etcdClient.Defragment(ctx, ep)
-				if err != nil {
-					zctx.Error("failed to defragment", zap.Error(err))
-					continue
+				select {
+				case <-ctx.Done():
+					break
+				case <-time.After(after):
+					after = time.Second * 5
+					zctx := zap.L().With(
+						zap.String("endpoint", ep),
+					)
+					_, err = e.etcdClient.Defragment(ctx, ep)
+					if err != nil {
+						zctx.Error("failed to defragment", zap.Error(err))
+						continue
+					}
+					zctx.Info("successfully defragment")
+					// TODO: do something smarter
 				}
-				zctx.Info("successfully defragment")
 			}
 
 		case <-ticker.C:
@@ -301,7 +310,7 @@ func (e *Etcd) Run(ctx context.Context) error {
 				e.etcdClient.ActiveConnection().Target(),
 			).Inc()
 
-		case <-resync.C:
+		case <-reSync.C:
 			zap.L().Debug("forcing a full resync")
 			e.seenPeers = make(map[wgtypes.Key]*Peer, len(e.seenPeers))
 			if reconcile == nil {
@@ -310,7 +319,7 @@ func (e *Etcd) Run(ctx context.Context) error {
 			}
 
 		case <-reconcile:
-			err := e.updateEtcdState(ctx)
+			err = e.updateEtcdState(ctx)
 			if err != nil {
 				zap.L().Error("failed to update etcd state", zap.Error(err))
 				reconcile = time.After(e.conf.ReconcileInterval * 10)

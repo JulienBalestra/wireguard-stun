@@ -347,7 +347,7 @@ func (e *Etcd) Run(ctx context.Context) error {
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
-		connState := ticknow.NewTickNow(ctx, time.Second)
+		connState := ticknow.NewTickNowWithContext(ctx, time.Second)
 		for {
 			select {
 			case <-ctx.Done():
