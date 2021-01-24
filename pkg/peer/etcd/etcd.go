@@ -159,7 +159,7 @@ func (e *Etcd) processEvents(ctx context.Context, w clientv3.WatchChan) error {
 				e.receivedEvents.WithLabelValues(labelEmpty).Inc()
 				continue
 			}
-			e.receivedEvents.WithLabelValues(labelEvents)
+			e.receivedEvents.WithLabelValues(labelEvents).Inc()
 
 			// now the logic begins
 			currentPeers, err := e.wg.GetIndexedPeers()
