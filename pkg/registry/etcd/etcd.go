@@ -11,6 +11,7 @@ import (
 
 	"github.com/JulienBalestra/dry/pkg/promregister"
 	"github.com/JulienBalestra/dry/pkg/ticknow"
+	"github.com/JulienBalestra/wireguard-stun/pkg/etcd/metrics"
 	"github.com/JulienBalestra/wireguard-stun/pkg/wireguard"
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus"
@@ -19,7 +20,6 @@ import (
 	"go.uber.org/zap"
 	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
-	"google.golang.org/grpc/connectivity"
 )
 
 type Config struct {
@@ -107,6 +107,16 @@ func NewEtcd(conf *Config) (*Etcd, error) {
 	)
 	if err != nil {
 		return nil, err
+	}
+	e.seenPeersMetrics.Set(0)
+	labels := []string{"true", "false"}
+	for _, first := range labels {
+		for _, second := range labels {
+			e.updateEtcdMetrics.WithLabelValues(first, second).Add(0)
+			for _, third := range labels {
+				e.updateMetrics.WithLabelValues(first, second, third).Add(0)
+			}
+		}
 	}
 	e.mux.NewRoute().Name("metrics").Path("/metrics").Methods(http.MethodGet).Handler(promhttp.Handler())
 	return e, nil
@@ -251,12 +261,7 @@ func (e *Etcd) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	target := e.etcdClient.ActiveConnection().Target()
-	e.etcdConnState.WithLabelValues(connectivity.Idle.String(), target).Add(0)
-	e.etcdConnState.WithLabelValues(connectivity.Connecting.String(), target).Add(0)
-	e.etcdConnState.WithLabelValues(connectivity.Ready.String(), target).Add(0)
-	e.etcdConnState.WithLabelValues(connectivity.TransientFailure.String(), target).Add(0)
-	e.etcdConnState.WithLabelValues(connectivity.Shutdown.String(), target).Add(0)
+	metrics.InitEtcdConnectionState(e.etcdConnState, e.etcdClient.ActiveConnection())
 
 	reSync := ticknow.NewTickNowWithContext(ctx, e.conf.ReSyncInterval)
 	ticker := ticknow.NewTickNowWithContext(ctx, time.Second)
