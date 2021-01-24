@@ -25,6 +25,15 @@ import (
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
+const (
+	labelProgressNotify = "progress-notify"
+	labelClose          = "close"
+	labelEvents         = "events"
+	labelError          = "error"
+	labelCancel         = "cancel"
+	labelEmpty          = "empty"
+)
+
 type Config struct {
 	EtcdEndpoint string
 	EtcdPrefix   string
@@ -108,6 +117,13 @@ func NewPeerEtcd(conf *Config) (*Etcd, error) {
 	if err != nil {
 		return nil, err
 	}
+	e.seenPeers.Set(0)
+	e.receivedEvents.WithLabelValues(labelClose).Add(0)
+	e.receivedEvents.WithLabelValues(labelEvents).Add(0)
+	e.receivedEvents.WithLabelValues(labelProgressNotify).Add(0)
+	e.receivedEvents.WithLabelValues(labelError).Add(0)
+	e.receivedEvents.WithLabelValues(labelCancel).Add(0)
+	e.receivedEvents.WithLabelValues(labelEmpty).Add(0)
 	e.mux.NewRoute().Name("metrics").Path("/metrics").Methods(http.MethodGet).Handler(promhttp.Handler())
 	return e, nil
 }
@@ -121,30 +137,30 @@ func (e *Etcd) processEvents(ctx context.Context, w clientv3.WatchChan) error {
 		case update, ok := <-w:
 			if !ok {
 				zap.L().Info("chan is closed")
-				e.receivedEvents.WithLabelValues("close").Inc()
+				e.receivedEvents.WithLabelValues(labelClose).Inc()
 				return nil
 			}
 			if update.Canceled {
 				zap.L().Info("updates canceled")
-				e.receivedEvents.WithLabelValues("cancel").Inc()
+				e.receivedEvents.WithLabelValues(labelCancel).Inc()
 				return nil
 			}
 			if update.Err() != nil {
 				zap.L().Error("error while watching", zap.Error(update.Err()))
-				e.receivedEvents.WithLabelValues("error").Inc()
+				e.receivedEvents.WithLabelValues(labelError).Inc()
 				return update.Err()
 			}
 			if update.IsProgressNotify() {
 				zap.L().Info("received progress notify")
-				e.receivedEvents.WithLabelValues("progress-notify").Inc()
+				e.receivedEvents.WithLabelValues(labelProgressNotify).Inc()
 				continue
 			}
 			if len(update.Events) == 0 {
-				zap.L().Info("no event")
-				e.receivedEvents.WithLabelValues("empty").Inc()
+				zap.L().Warn("no event")
+				e.receivedEvents.WithLabelValues(labelEmpty).Inc()
 				continue
 			}
-			e.receivedEvents.WithLabelValues("events").Inc()
+			e.receivedEvents.WithLabelValues(labelEvents)
 
 			// now the logic begins
 			currentPeers, err := e.wg.GetIndexedPeers()
@@ -344,6 +360,12 @@ func (e *Etcd) Run(ctx context.Context) error {
 		zap.L().Error("failed to create etcd client", zap.Error(err))
 		return err
 	}
+	target := cli.ActiveConnection().Target()
+	e.etcdConnState.WithLabelValues(connectivity.Idle.String(), target).Add(0)
+	e.etcdConnState.WithLabelValues(connectivity.Connecting.String(), target).Add(0)
+	e.etcdConnState.WithLabelValues(connectivity.Ready.String(), target).Add(0)
+	e.etcdConnState.WithLabelValues(connectivity.TransientFailure.String(), target).Add(0)
+	e.etcdConnState.WithLabelValues(connectivity.Shutdown.String(), target).Add(0)
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
