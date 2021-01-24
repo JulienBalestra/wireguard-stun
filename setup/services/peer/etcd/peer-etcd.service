@@ -4,10 +4,10 @@ Description=wireguard-stun
 Documentation=https://github.com/JulienBalestra/wireguard-stun
 
 [Service]
-Environment=RESOLVER_ENDPOINT=
+Environment=ETCD_ENDPOINTS=
 EnvironmentFile=/etc/wireguard-stun/environment
 
-ExecStart=/usr/local/bin/wireguard-stun peer dns --resolver-endpoint $RESOLVER_ENDPOINT
+ExecStart=/usr/local/bin/wireguard-stun peer etcd --etcd-endpoints $ETCD_ENDPOINTS
 Restart=always
 RestartSec=30
 
