@@ -108,6 +108,16 @@ func NewEtcd(conf *Config) (*Etcd, error) {
 	if err != nil {
 		return nil, err
 	}
+	e.seenPeersMetrics.Set(0)
+	labels := []string{"true", "false"}
+	for _, first := range labels {
+		for _, second := range labels {
+			e.updateEtcdMetrics.WithLabelValues(first, second).Add(0)
+			for _, third := range labels {
+				e.updateMetrics.WithLabelValues(first, second, third).Add(0)
+			}
+		}
+	}
 	e.mux.NewRoute().Name("metrics").Path("/metrics").Methods(http.MethodGet).Handler(promhttp.Handler())
 	return e, nil
 }
