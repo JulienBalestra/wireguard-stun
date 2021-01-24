@@ -179,6 +179,10 @@ network={
 }
 EOF
 sudo chmod 600 /etc/wpa_supplicant/wpa_supplicant-wlan0.conf
+
+sudo systemctl daemon-reload
+sudo systemctl enable wpa_supplicant@wlan0.service
+sudo systemctl restart wpa_supplicant@wlan0.service
 ```
 
 Cleaning:
