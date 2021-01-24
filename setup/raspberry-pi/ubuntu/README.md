@@ -185,6 +185,13 @@ sudo systemctl enable wpa_supplicant@wlan0.service
 sudo systemctl restart wpa_supplicant@wlan0.service
 ```
 
+In case there is a wireguard PostUp PostDown with the interface `eth0`, replace by `br0`:
+```
+PostUp =   iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o br0 -j MASQUERADE
+
+PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o br0 -j MASQUERADE
+```
+
 Cleaning:
 ```bash
 sudo apt-get autoclean && sudo apt-get autoremove -y
