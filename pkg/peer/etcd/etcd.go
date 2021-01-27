@@ -127,35 +127,45 @@ func NewPeerEtcd(conf *Config) (*Etcd, error) {
 	return e, nil
 }
 
-func (e *Etcd) processEvents(ctx context.Context, w clientv3.WatchChan) error {
+type subscription struct {
+	w            clientv3.WatchChan
+	mu           *sync.RWMutex
+	lastActivity time.Time
+	zctx         *zap.Logger
+}
+
+func (e *Etcd) processEvents(ctx context.Context, sub *subscription) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 
-		case update, ok := <-w:
+		case update, ok := <-sub.w:
 			if !ok {
-				zap.L().Info("chan is closed")
+				sub.zctx.Info("chan is closed")
 				e.receivedEvents.WithLabelValues(labelClose).Inc()
 				return nil
 			}
 			if update.Canceled {
-				zap.L().Info("updates canceled")
+				sub.zctx.Info("updates canceled")
 				e.receivedEvents.WithLabelValues(labelCancel).Inc()
 				return nil
 			}
 			if update.Err() != nil {
-				zap.L().Error("error while watching", zap.Error(update.Err()))
+				sub.zctx.Error("error while watching", zap.Error(update.Err()))
 				e.receivedEvents.WithLabelValues(labelError).Inc()
 				return update.Err()
 			}
+			sub.mu.Lock()
+			sub.lastActivity = time.Now()
+			sub.mu.Unlock()
 			if update.IsProgressNotify() {
-				zap.L().Info("received progress notify")
+				sub.zctx.Info("received progress notify")
 				e.receivedEvents.WithLabelValues(labelProgressNotify).Inc()
 				continue
 			}
 			if len(update.Events) == 0 {
-				zap.L().Warn("no event")
+				sub.zctx.Warn("no event")
 				e.receivedEvents.WithLabelValues(labelEmpty).Inc()
 				continue
 			}
@@ -176,7 +186,7 @@ func (e *Etcd) processEvents(ctx context.Context, w clientv3.WatchChan) error {
 				key := string(ev.Kv.Key)
 				value := ev.Kv.Value
 				publicKey := strings.TrimLeft(key, e.conf.EtcdPrefix)
-				zctx := zap.L().With(
+				zctx := sub.zctx.With(
 					zap.String("etcdKey", key),
 					zap.String("publicKey", publicKey),
 					zap.ByteString("etcdValue", value),
@@ -220,7 +230,7 @@ func (e *Etcd) processEvents(ctx context.Context, w clientv3.WatchChan) error {
 			}
 			err = e.wg.SetNewEndpoints(updates)
 			if err != nil {
-				zap.L().Error("failed to set new endpoints", zap.Error(err))
+				sub.zctx.Error("failed to set new endpoints", zap.Error(err))
 				continue
 			}
 		}
@@ -286,31 +296,39 @@ func (e *Etcd) watchWireguardPeers(ctx context.Context) error {
 	e.seenPeers.Set(float64(len(peers)))
 
 	ctx, cancel := context.WithCancel(ctx)
-	wg := sync.WaitGroup{}
+	wg := &sync.WaitGroup{}
+	var subs []*subscription
 	for _, p := range peers {
 		_, ok := e.staticPeers[p.PublicKey]
 		if ok {
 			continue
 		}
 		wg.Add(1)
-		go func(s string) {
+		s := p.PublicKey.String()
+		etcdKey := e.conf.EtcdPrefix + s
+		zctx := zap.L().With(
+			zap.String("publicKey", s),
+			zap.String("etcdKey", etcdKey),
+		)
+		// TODO: get and set before watch
+		zctx.Info("starting to watch")
+		sub := &subscription{
+			w:            e.etcdClient.Watch(ctx, etcdKey, clientv3.WithFilterDelete(), clientv3.WithProgressNotify()),
+			mu:           &sync.RWMutex{},
+			lastActivity: time.Now(),
+			zctx:         zctx,
+		}
+		go func(s *subscription) {
 			defer cancel()
 			defer wg.Done()
-			etcdKey := e.conf.EtcdPrefix + s
-			zctx := zap.L().With(
-				zap.String("publicKey", s),
-				zap.String("etcdKey", etcdKey),
-			)
-			// TODO: get and set before watch
-			zctx.Info("starting to watch")
-			w := e.etcdClient.Watch(ctx, etcdKey, clientv3.WithFilterDelete(), clientv3.WithProgressNotify())
-			err = e.processEvents(ctx, w)
+			err = e.processEvents(ctx, sub)
 			if err != nil {
-				zctx.Error("finished to watch on error", zap.Error(err))
+				sub.zctx.Error("finished to watch on error", zap.Error(err))
 				return
 			}
-			zctx.Info("finished to watch")
-		}(p.PublicKey.String())
+			sub.zctx.Info("finished to watch")
+		}(sub)
+		subs = append(subs, sub)
 	}
 	watchdog := time.NewTicker(time.Millisecond * 100)
 	for {
@@ -322,6 +340,18 @@ func (e *Etcd) watchWireguardPeers(ctx context.Context) error {
 			return nil
 
 		case <-watchdog.C:
+			for _, sub := range subs {
+				sub.mu.RLock()
+				since := time.Since(sub.lastActivity)
+				sub.mu.RUnlock()
+				if since < time.Minute*10+time.Second*30 {
+					continue
+				}
+				sub.zctx.With(
+					zap.Float64("sinceLastActivity", since.Seconds()),
+				).Warn("canceling watches")
+				cancel()
+			}
 			state := e.etcdClient.ActiveConnection().GetState()
 			switch state {
 			case connectivity.TransientFailure:
@@ -361,13 +391,15 @@ func (e *Etcd) Run(ctx context.Context) error {
 	}
 	metrics.InitEtcdConnectionState(e.etcdConnState, e.etcdClient.ActiveConnection())
 	wg := sync.WaitGroup{}
+	defer wg.Wait()
+
 	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		connState := ticknow.NewTickNowWithContext(ctx, time.Second)
 		for {
 			select {
 			case <-ctx.Done():
-				wg.Done()
 				return
 
 			case <-connState.C:
@@ -386,7 +418,6 @@ func (e *Etcd) Run(ctx context.Context) error {
 			_ = e.etcdClient.Watcher.Close()
 			_ = e.etcdClient.ActiveConnection().Close()
 			_ = e.etcdClient.Close()
-			wg.Wait()
 			return nil
 
 		case <-after:

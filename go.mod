@@ -3,7 +3,7 @@ module github.com/JulienBalestra/wireguard-stun
 go 1.15
 
 require (
-	github.com/JulienBalestra/dry v0.5.0
+	github.com/JulienBalestra/dry v0.6.0
 	github.com/gorilla/mux v1.8.0
 	github.com/miekg/dns v1.1.35
 	github.com/prometheus/client_golang v1.9.0

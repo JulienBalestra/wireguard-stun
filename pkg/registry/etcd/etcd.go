@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/JulienBalestra/dry/pkg/promregister"
@@ -18,7 +19,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.etcd.io/etcd/clientv3"
 	"go.uber.org/zap"
-	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
@@ -37,10 +37,11 @@ type Config struct {
 
 type Etcd struct {
 	conf               *Config
-	wgClient           *wgctrl.Client
+	wg                 *wireguard.Wireguard
 	etcdClient         *clientv3.Client
 	seenPeers          map[wgtypes.Key]*Peer
 	compactionRevision int64
+	mu                 *sync.RWMutex
 
 	updateMetrics     *prometheus.CounterVec
 	etcdConnState     *prometheus.CounterVec
@@ -53,14 +54,15 @@ func NewEtcd(conf *Config) (*Etcd, error) {
 	if conf.EtcdEndpoints == nil {
 		return nil, errors.New("must provide etcd endpoints")
 	}
-	c, err := wgctrl.New()
+	c, err := wireguard.NewWireguardClient(conf.Wireguard)
 	if err != nil {
 		return nil, err
 	}
 	e := &Etcd{
-		conf:     conf,
-		mux:      mux.NewRouter(),
-		wgClient: c,
+		conf: conf,
+		mux:  mux.NewRouter(),
+		mu:   &sync.RWMutex{},
+		wg:   c,
 		updateMetrics: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "wireguard_stun_registry_etcd_update_triggers",
 			ConstLabels: prometheus.Labels{
@@ -128,14 +130,16 @@ type Peer struct {
 }
 
 func (e *Etcd) updateEtcdState(ctx context.Context) error {
-	d, err := e.wgClient.Device(e.conf.Wireguard.DeviceName)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	peers, err := e.wg.GetPeers()
 	if err != nil {
 		zap.L().Error("failed to get device", zap.Error(err))
 		return err
 	}
 
 	updates := make(map[wgtypes.Key]*Peer)
-	for _, currentPeer := range d.Peers {
+	for _, currentPeer := range peers {
 		if currentPeer.Endpoint == nil {
 			continue
 		}
@@ -263,69 +267,106 @@ func (e *Etcd) Run(ctx context.Context) error {
 	}
 	metrics.InitEtcdConnectionState(e.etcdConnState, e.etcdClient.ActiveConnection())
 
+	wg := &sync.WaitGroup{}
+	defer wg.Wait()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		connState := ticknow.NewTickNowWithContext(ctx, time.Second)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+
+			case <-connState.C:
+				e.etcdConnState.WithLabelValues(
+					e.etcdClient.ActiveConnection().GetState().String(),
+					e.etcdClient.ActiveConnection().Target(),
+				).Inc()
+			}
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defrag := time.NewTicker(e.conf.DefragInterval)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+
+			case <-defrag.C:
+				var after time.Duration = 0
+				for _, ep := range e.etcdClient.Endpoints() {
+					select {
+					case <-ctx.Done():
+						return
+
+					case <-time.After(after):
+						after = time.Second * 5
+						zctx := zap.L().With(
+							zap.String("endpoint", ep),
+						)
+						_, err = e.etcdClient.Defragment(ctx, ep)
+						if err != nil {
+							zctx.Error("failed to defragment", zap.Error(err))
+							continue
+						}
+						zctx.Info("successfully defragment")
+						// TODO: do something smarter
+					}
+				}
+			}
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		compaction := time.NewTicker(e.conf.CompactionInterval)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+
+			case <-compaction.C:
+				e.mu.RLock()
+				rev := e.compactionRevision
+				e.mu.RUnlock()
+				if rev == 0 {
+					continue
+				}
+				zctx := zap.L().With(
+					zap.Int64("compactionRevision", e.compactionRevision),
+				)
+				_, err = e.etcdClient.Compact(ctx, e.compactionRevision)
+				e.compactionRevision = 0
+				if err != nil {
+					zctx.Error("failed to compact revision", zap.Error(err))
+					continue
+				}
+				zctx.Info("successfully compacted")
+			}
+		}
+	}()
+
 	reSync := ticknow.NewTickNowWithContext(ctx, e.conf.ReSyncInterval)
-	ticker := ticknow.NewTickNowWithContext(ctx, time.Second)
 	var reconcile <-chan time.Time
-
-	defrag := time.NewTicker(e.conf.DefragInterval)
-	defer defrag.Stop()
-
-	compaction := time.NewTicker(e.conf.CompactionInterval)
-	defer compaction.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			_ = e.etcdClient.ActiveConnection().Close()
 			_ = e.etcdClient.Close()
-			_ = e.wgClient.Close()
 			_ = l.Close()
 			return nil
 
-		case <-compaction.C:
-			if e.compactionRevision == 0 {
-				continue
-			}
-			zctx := zap.L().With(
-				zap.Int64("compactionRevision", e.compactionRevision),
-			)
-			_, err = e.etcdClient.Compact(ctx, e.compactionRevision)
-			e.compactionRevision = 0
-			if err != nil {
-				zctx.Error("failed to compact revision", zap.Error(err))
-				continue
-			}
-			zctx.Info("successfully compacted")
-
-		case <-defrag.C:
-			var after time.Duration = 0
-			for _, ep := range e.etcdClient.Endpoints() {
-				select {
-				case <-ctx.Done():
-					break
-				case <-time.After(after):
-					after = time.Second * 5
-					zctx := zap.L().With(
-						zap.String("endpoint", ep),
-					)
-					_, err = e.etcdClient.Defragment(ctx, ep)
-					if err != nil {
-						zctx.Error("failed to defragment", zap.Error(err))
-						continue
-					}
-					zctx.Info("successfully defragment")
-					// TODO: do something smarter
-				}
-			}
-
-		case <-ticker.C:
-			e.etcdConnState.WithLabelValues(
-				e.etcdClient.ActiveConnection().GetState().String(),
-				e.etcdClient.ActiveConnection().Target(),
-			).Inc()
-
 		case <-reSync.C:
 			zap.L().Debug("forcing a full resync")
+			e.mu.Lock()
 			e.seenPeers = make(map[wgtypes.Key]*Peer, len(e.seenPeers))
+			e.mu.Unlock()
 			if reconcile == nil {
 				zap.L().Info("starting reconciliation")
 				reconcile = time.After(0)
