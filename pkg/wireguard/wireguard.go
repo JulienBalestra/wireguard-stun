@@ -56,9 +56,10 @@ func NewWireguardClient(conf *Config) (*Wireguard, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Wireguard{
+	wg := &Wireguard{
 		conf: conf,
-	}, nil
+	}
+	return wg, nil
 }
 
 func (w *Wireguard) GetPeers() ([]wgtypes.Peer, error) {
@@ -136,13 +137,15 @@ func (w *Wireguard) SetNewEndpoints(peerUpdates map[wgtypes.Key]net.UDPAddr) err
 			zap.String("endpoint", newEndpoint.String()),
 			zap.String("publicKey", peer.PublicKey.String()),
 		)
+		var preSharedKey wgtypes.Key
+		copy(preSharedKey[:], peer.PresharedKey[:])
 		cfg := wgtypes.PeerConfig{
 			PublicKey:                   peer.PublicKey,
 			UpdateOnly:                  false,
-			PresharedKey:                &peer.PresharedKey,
+			PresharedKey:                &preSharedKey,
 			Endpoint:                    &newEndpoint,
 			PersistentKeepaliveInterval: &peer.PersistentKeepaliveInterval,
-			ReplaceAllowedIPs:           false,
+			ReplaceAllowedIPs:           true,
 			AllowedIPs:                  peer.AllowedIPs,
 		}
 		delete(peerUpdates, peer.PublicKey)

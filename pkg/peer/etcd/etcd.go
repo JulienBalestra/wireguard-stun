@@ -286,7 +286,7 @@ func (e *Etcd) watchWireguardPeers(ctx context.Context) error {
 	e.seenPeers.Set(float64(len(peers)))
 
 	ctx, cancel := context.WithCancel(ctx)
-	wg := sync.WaitGroup{}
+	wg := &sync.WaitGroup{}
 	for _, p := range peers {
 		_, ok := e.staticPeers[p.PublicKey]
 		if ok {
@@ -361,13 +361,15 @@ func (e *Etcd) Run(ctx context.Context) error {
 	}
 	metrics.InitEtcdConnectionState(e.etcdConnState, e.etcdClient.ActiveConnection())
 	wg := sync.WaitGroup{}
+	defer wg.Wait()
+
 	wg.Add(1)
 	go func() {
+		defer wg.Wait()
 		connState := ticknow.NewTickNowWithContext(ctx, time.Second)
 		for {
 			select {
 			case <-ctx.Done():
-				wg.Done()
 				return
 
 			case <-connState.C:
@@ -386,7 +388,6 @@ func (e *Etcd) Run(ctx context.Context) error {
 			_ = e.etcdClient.Watcher.Close()
 			_ = e.etcdClient.ActiveConnection().Close()
 			_ = e.etcdClient.Close()
-			wg.Wait()
 			return nil
 
 		case <-after:
