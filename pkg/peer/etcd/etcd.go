@@ -365,7 +365,7 @@ func (e *Etcd) Run(ctx context.Context) error {
 
 	wg.Add(1)
 	go func() {
-		defer wg.Wait()
+		defer wg.Done()
 		connState := ticknow.NewTickNowWithContext(ctx, time.Second)
 		for {
 			select {
