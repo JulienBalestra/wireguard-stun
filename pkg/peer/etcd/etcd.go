@@ -30,6 +30,16 @@ const (
 	labelError          = "error"
 	labelCancel         = "cancel"
 	labelEmpty          = "empty"
+
+	labelTrue          = "true"
+	labelFalse         = "false"
+	labelMismatch      = "mismatch"
+	labelPublicKey     = "public-key"
+	labelUnknownPeer   = "unknown-peer"
+	labelJsonDecode    = "json-decode"
+	labelParseEndpoint = "parse-endpoint"
+	labelSetEndpoints  = "set-endpoints"
+	labelOK            = "ok"
 )
 
 type Config struct {
@@ -51,6 +61,7 @@ type Etcd struct {
 
 	receivedEvents *prometheus.CounterVec
 	etcdConnState  *prometheus.CounterVec
+	etcdEvents     *prometheus.CounterVec
 	seenPeers      prometheus.Gauge
 }
 
@@ -100,6 +111,14 @@ func NewPeerEtcd(conf *Config) (*Etcd, error) {
 				"target",
 			},
 		),
+		etcdEvents: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "wireguard_stun_etcd_events",
+		},
+			[]string{
+				"success",
+				"reason",
+			},
+		),
 		seenPeers: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "wireguard_stun_peers",
 			ConstLabels: prometheus.Labels{
@@ -111,17 +130,29 @@ func NewPeerEtcd(conf *Config) (*Etcd, error) {
 		e.receivedEvents,
 		e.etcdConnState,
 		e.seenPeers,
+		e.etcdEvents,
 	)
 	if err != nil {
 		return nil, err
 	}
+
 	e.seenPeers.Set(0)
+
 	e.receivedEvents.WithLabelValues(labelClose).Add(0)
 	e.receivedEvents.WithLabelValues(labelEvents).Add(0)
 	e.receivedEvents.WithLabelValues(labelProgressNotify).Add(0)
 	e.receivedEvents.WithLabelValues(labelError).Add(0)
 	e.receivedEvents.WithLabelValues(labelCancel).Add(0)
 	e.receivedEvents.WithLabelValues(labelEmpty).Add(0)
+
+	e.etcdEvents.WithLabelValues(labelTrue, labelOK).Add(0)
+	e.etcdEvents.WithLabelValues(labelFalse, labelMismatch).Add(0)
+	e.etcdEvents.WithLabelValues(labelFalse, labelPublicKey).Add(0)
+	e.etcdEvents.WithLabelValues(labelFalse, labelUnknownPeer).Add(0)
+	e.etcdEvents.WithLabelValues(labelFalse, labelJsonDecode).Add(0)
+	e.etcdEvents.WithLabelValues(labelFalse, labelParseEndpoint).Add(0)
+	e.etcdEvents.WithLabelValues(labelFalse, labelSetEndpoints).Add(0)
+
 	e.mux.NewRoute().Name("metrics").Path("/metrics").Methods(http.MethodGet).Handler(promhttp.Handler())
 	return e, nil
 }
@@ -180,6 +211,10 @@ func (e *Etcd) processEvents(ctx context.Context, sub *subscription) error {
 			updates := make(map[wgtypes.Key]net.UDPAddr, len(update.Events))
 			for _, ev := range update.Events {
 				if ev.Type != clientv3.EventTypePut {
+					e.etcdEvents.WithLabelValues(
+						labelFalse,
+						labelMismatch,
+					).Inc()
 					continue
 				}
 				key := string(ev.Kv.Key)
@@ -193,17 +228,29 @@ func (e *Etcd) processEvents(ctx context.Context, sub *subscription) error {
 				k, err := wgtypes.ParseKey(publicKey)
 				if err != nil {
 					zctx.Error("failed to decode publicKey", zap.Error(err))
+					e.etcdEvents.WithLabelValues(
+						labelFalse,
+						labelPublicKey,
+					).Inc()
 					continue
 				}
 				cp, ok := currentPeers[k]
 				if !ok {
 					zctx.Warn("unknown peer")
+					e.etcdEvents.WithLabelValues(
+						labelFalse,
+						labelUnknownPeer,
+					).Inc()
 					continue
 				}
 				ep := &etcd.Peer{}
 				err = json.Unmarshal(value, ep)
 				if err != nil {
 					zctx.Error("failed to decode event", zap.Error(err))
+					e.etcdEvents.WithLabelValues(
+						labelFalse,
+						labelJsonDecode,
+					).Inc()
 					continue
 				}
 				zctx = zctx.With(
@@ -220,6 +267,10 @@ func (e *Etcd) processEvents(ctx context.Context, sub *subscription) error {
 				u, err := wireguard.ParseEndpoint(ep.Endpoint)
 				if err != nil {
 					zctx.Error("failed to parse endpoint", zap.Error(err))
+					e.etcdEvents.WithLabelValues(
+						labelFalse,
+						labelParseEndpoint,
+					).Inc()
 					continue
 				}
 				updates[cp.PublicKey] = *u
@@ -230,8 +281,16 @@ func (e *Etcd) processEvents(ctx context.Context, sub *subscription) error {
 			err = e.wg.SetNewEndpoints(updates)
 			if err != nil {
 				sub.zctx.Error("failed to set new endpoints", zap.Error(err))
+				e.etcdEvents.WithLabelValues(
+					labelFalse,
+					labelSetEndpoints,
+				).Inc()
 				continue
 			}
+			e.etcdEvents.WithLabelValues(
+				labelTrue,
+				labelOK,
+			).Inc()
 		}
 	}
 }
