@@ -112,7 +112,7 @@ func NewPeerEtcd(conf *Config) (*Etcd, error) {
 			},
 		),
 		etcdEvents: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "wireguard_stun_etcd_events",
+			Name: "wireguard_stun_peer_etcd_events",
 		},
 			[]string{
 				"success",
