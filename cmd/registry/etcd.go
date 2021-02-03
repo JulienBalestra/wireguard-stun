@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/JulienBalestra/dry/pkg/signals"
+	"github.com/JulienBalestra/wireguard-stun/pkg/etcd/schema"
 	"github.com/JulienBalestra/wireguard-stun/pkg/registry/etcd"
 	"github.com/JulienBalestra/wireguard-stun/pkg/wireguard"
 	"github.com/spf13/cobra"
@@ -26,6 +27,7 @@ func NewEtcdCommand(ctx context.Context) *cobra.Command {
 	}
 	fs.StringVar(&config.Wireguard.DeviceName, "device-name", "wg0", "wireguard device name")
 	fs.StringArrayVar(&config.EtcdEndpoints, "etcd-endpoints", []string{"127.0.0.1:2379"}, "etcd endpoints")
+	fs.StringVar(&config.EtcdPrefix, "etcd-prefix", schema.PeerKeyPrefix, "etcd key prefix for peers")
 	fs.DurationVar(&config.ReconcileInterval, "reconcile-interval", time.Millisecond*100, "reconciliation interval")
 	fs.DurationVar(&config.ReSyncInterval, "resync-interval", time.Minute, "full resync interval")
 	fs.DurationVar(&config.CompactionInterval, "compaction-interval", time.Hour, "compaction interval")

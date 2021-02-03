@@ -32,6 +32,7 @@ type Config struct {
 	HandshakeAge       time.Duration
 
 	EtcdEndpoints []string
+	EtcdPrefix    string
 	ListenAddr    string
 }
 
@@ -206,7 +207,7 @@ func (e *Etcd) updateEtcdState(ctx context.Context) error {
 		return nil
 	}
 	for key, peer := range updates {
-		etcdKey := "/peers/" + key.String()
+		etcdKey := e.conf.EtcdPrefix + key.String()
 		zctx := zap.L().With(
 			zap.String("etcdKey", etcdKey),
 			zap.String("publicKey", key.String()),
