@@ -33,13 +33,12 @@ const (
 )
 
 type Config struct {
-	EtcdEndpoint string
-	EtcdPrefix   string
-
-	Wireguard     *wireguard.Config
 	EtcdEndpoints []string
-	ListenAddr    string
-	StaticPeers   []string
+	EtcdPrefix    string
+
+	Wireguard   *wireguard.Config
+	ListenAddr  string
+	StaticPeers []string
 }
 
 type Etcd struct {
@@ -185,7 +184,7 @@ func (e *Etcd) processEvents(ctx context.Context, sub *subscription) error {
 				}
 				key := string(ev.Kv.Key)
 				value := ev.Kv.Value
-				publicKey := strings.TrimLeft(key, e.conf.EtcdPrefix)
+				publicKey := strings.TrimPrefix(key, e.conf.EtcdPrefix)
 				zctx := sub.zctx.With(
 					zap.String("etcdKey", key),
 					zap.String("publicKey", publicKey),
