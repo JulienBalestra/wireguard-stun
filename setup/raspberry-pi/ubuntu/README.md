@@ -5,8 +5,9 @@ https://ubuntu.com/download/raspberry-pi
 
 Prepare the image
 ```bash
-curl -LO https://cdimage.ubuntu.com/releases/20.04.1/release/ubuntu-20.04.1-preinstalled-server-arm64+raspi.img.xz 
-xz -d ubuntu-20.04.1-preinstalled-server-arm64+raspi.img.xz
+i=2
+curl -LO https://cdimage.ubuntu.com/releases/20.04.${i}/release/ubuntu-20.04.${i}-preinstalled-server-arm64+raspi.img.xz 
+xz -d ubuntu-20.04.${i}-preinstalled-server-arm64+raspi.img.xz
 sudo balena-etcher
 
 # installation through the graphic interface
@@ -26,9 +27,12 @@ Wireguard installation:
 ```bash
 sudo apt-get update && sudo apt-get upgrade -y
 
-cat << EOF | sudo tee /etc/sysctl.d/wireguard.conf
+cat << EOF | sudo tee /etc/sysctl.d/999-wireguard.conf
 net.ipv4.ip_forward=1
 net.ipv4.tcp_congestion_control=bbr
+
+net.ipv6.conf.all.disable_ipv6=1
+net.ipv6.conf.default.disable_ipv6=1
 EOF
 
 sudo reboot
@@ -37,9 +41,9 @@ sudo apt-get install -y wireguard vim curl iperf iperf3
 
 Disable services
 ```bash
-sudo apt-get remove snapd apparmor cloud-init isc-dhcp-client isc-dhcp-common rsyslog ubuntu-minimal
-sudo apt-get autoremove
-sudo apt-get autopurge
+sudo apt-get remove snapd apparmor cloud-init
+sudo apt-get autoremove -y
+sudo apt-get autopurge -y
 sudo systemctl daemon-reload
 sudo rm -Rf /var/cache/snapd /etc/network /etc/dhcp
 
@@ -105,6 +109,7 @@ ip link show eth0 | grep ether | awk '{print $2}' | tr : - | sudo tee /etc/hostn
 cat << EOF | sudo tee /etc/hosts
 127.0.0.1 localhost $(cat /etc/hostname)
 EOF
+sudo reboot
 ```
 
 Disable systemd resolved
@@ -118,6 +123,7 @@ nameserver 8.8.8.8
 nameserver 8.8.4.4
 nameserver 1.1.1.1
 EOF
+sudo reboot
 ```
 
 Setup wireless access point bridged to ethernet:
