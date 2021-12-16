@@ -78,7 +78,10 @@ func NewPeerDNS(conf *Config) (*PeerDNS, error) {
 }
 
 func (p *PeerDNS) Run(ctx context.Context) error {
-	zap.L().Info("starting dns reconciliation", zap.Duration("reconcileInterval", p.conf.ReconcileInterval))
+	zap.L().Info("starting dns reconciliation",
+		zap.Duration("reconcileInterval", p.conf.ReconcileInterval),
+		zap.String("resolver", p.conf.ResolverEndpoint),
+	)
 	ticker := ticknow.NewTickNowWithContext(ctx, p.conf.ReconcileInterval)
 	for {
 		select {
@@ -91,6 +94,9 @@ func (p *PeerDNS) Run(ctx context.Context) error {
 }
 
 func (p *PeerDNS) ReconcilePeerEndpoints(ctx context.Context) error {
+	zctx := zap.L().With(
+		zap.String("resolver", p.conf.ResolverEndpoint),
+	)
 	peers, err := p.wg.GetHashedPeers()
 	if err != nil {
 		return err
@@ -104,7 +110,7 @@ func (p *PeerDNS) ReconcilePeerEndpoints(ctx context.Context) error {
 		}
 		handshakeAge := time.Since(peer.LastHandshakeTime)
 		srvQuery := peer.PublicKeyShortSha1 + p.conf.SRVRecordSuffix
-		zctx := zap.L().With(
+		zctx = zctx.With(
 			zap.String("publicKey", peer.PublicKey.String()),
 			zap.String("publicKeyHash", peer.PublicKeyShortSha1),
 			zap.String("srvQuery", srvQuery),
@@ -172,9 +178,9 @@ func (p *PeerDNS) ReconcilePeerEndpoints(ctx context.Context) error {
 		}
 	}
 	if len(peerUpdates) == 0 {
-		zap.L().Debug("no update")
+		zctx.Debug("no update")
 		return nil
 	}
-	zap.L().Debug("updating peer configuration")
+	zctx.Debug("updating peer configuration")
 	return p.wg.SetNewEndpoints(peerUpdates)
 }

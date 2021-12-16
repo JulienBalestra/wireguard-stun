@@ -346,9 +346,12 @@ func (e *Etcd) isConnReady(ctx context.Context) bool {
 }
 
 func (e *Etcd) watchWireguardPeers(ctx context.Context) error {
+	zctx := zap.L().With(
+		zap.Strings("etcdEndpoints", e.conf.EtcdEndpoints),
+	)
 	peers, err := e.wg.GetPeers()
 	if err != nil {
-		zap.L().Error("failed to get peers", zap.Error(err))
+		zctx.Error("failed to get peers", zap.Error(err))
 		return err
 	}
 	e.seenPeers.Set(float64(len(peers)))
@@ -364,7 +367,7 @@ func (e *Etcd) watchWireguardPeers(ctx context.Context) error {
 		wg.Add(1)
 		s := p.PublicKey.String()
 		etcdKey := e.conf.EtcdPrefix + s
-		zctx := zap.L().With(
+		zctx = zctx.With(
 			zap.String("publicKey", s),
 			zap.String("etcdKey", etcdKey),
 		)
@@ -406,6 +409,7 @@ func (e *Etcd) watchWireguardPeers(ctx context.Context) error {
 					continue
 				}
 				sub.zctx.With(
+					zap.Strings("etcdEndpoints", e.conf.EtcdEndpoints),
 					zap.Float64("sinceLastActivity", since.Seconds()),
 				).Warn("canceling watches")
 				cancel()
@@ -413,12 +417,14 @@ func (e *Etcd) watchWireguardPeers(ctx context.Context) error {
 			state := e.etcdClient.ActiveConnection().GetState()
 			switch state {
 			case connectivity.TransientFailure:
-				zap.L().With(
+				zctx.With(
+					zap.Strings("etcdEndpoints", e.conf.EtcdEndpoints),
 					zap.String("state", state.String()),
 				).Warn("connectivity with transient failure, canceling watches")
 				cancel()
 			case connectivity.Connecting:
-				zap.L().With(
+				zctx.With(
+					zap.Strings("etcdEndpoints", e.conf.EtcdEndpoints),
 					zap.String("state", state.String()),
 				).Warn("lost connection, canceling watches")
 				cancel()
@@ -428,6 +434,9 @@ func (e *Etcd) watchWireguardPeers(ctx context.Context) error {
 }
 
 func (e *Etcd) Run(ctx context.Context) error {
+	zctx := zap.L().With(
+		zap.Strings("etcdEndpoints", e.conf.EtcdEndpoints),
+	)
 	l, err := net.Listen("tcp4", e.conf.ListenAddr)
 	if err != nil {
 		return err
@@ -444,7 +453,7 @@ func (e *Etcd) Run(ctx context.Context) error {
 		PermitWithoutStream:  true,
 	})
 	if err != nil {
-		zap.L().Error("failed to create etcd client", zap.Error(err))
+		zctx.Error("failed to create etcd client", zap.Error(err))
 		return err
 	}
 	metrics.InitEtcdConnectionState(e.etcdConnState, e.etcdClient.ActiveConnection())
@@ -481,7 +490,7 @@ func (e *Etcd) Run(ctx context.Context) error {
 		case <-after:
 			var wait time.Duration = 0
 
-			zap.L().Info("starting etcd reconciliation")
+			zctx.Info("starting etcd reconciliation")
 			if !e.isConnReady(ctx) {
 				after = time.After(wait)
 				continue
